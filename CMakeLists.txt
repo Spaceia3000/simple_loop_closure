@@ -93,6 +93,10 @@ install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME} 
 )
 
+install(PROGRAMS scripts/evaluate_loop_closures.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
@@ -107,6 +111,9 @@ if(BUILD_TESTING)
     ENV
       "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
       "ROS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/ros_test_logs"
+  )
+  ament_add_pytest_test(test_evaluate_loop_closures test/test_evaluate_loop_closures.py
+    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
   )
 endif()
 
