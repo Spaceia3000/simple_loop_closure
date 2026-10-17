@@ -3,11 +3,14 @@
 #define PCL_NO_PRECOMPILE
 
 #include <rclcpp/rclcpp.hpp>
+#include <simple_loop_closure/fast_livo2_contract.hpp>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/msg/point_field.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/approximate_time.h>
@@ -15,6 +18,7 @@
 
 #include <Eigen/Dense>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -58,7 +62,11 @@ private:
     typedef std::shared_ptr<Eigen::Affine3d> Affine3dPtr;
     typedef Eigen::Matrix<double, Eigen::Dynamic, 3> KDTreeMatrix;
     typedef nanoflann::KDTreeEigenMatrixAdaptor<KDTreeMatrix, 3, nanoflann::metric_L2_Simple> KDTree;
+#if NANOFLANN_VERSION >= 0x150
     typedef std::vector<nanoflann::ResultItem<long int, double>> NanoFlannSearchResult;
+#else
+    typedef std::vector<std::pair<long int, double>> NanoFlannSearchResult;
+#endif
     typedef std::pair<int, int> LoopEdgeID;
     typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::PointCloud2, nav_msgs::msg::Odometry> SyncPolicy;
     typedef message_filters::Synchronizer<SyncPolicy> Sync;
@@ -66,6 +74,9 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_cloud_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_vis_pose_graph_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_pgo_odometry_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_original_keyframes_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_optimized_keyframes_;
+    rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_loop_edges_;
 
 
     message_filters::Subscriber<sensor_msgs::msg::PointCloud2> sub_cloud_;
@@ -88,6 +99,8 @@ private:
     std::deque<double> trajectory_dist_;
     std::deque<double> trajectory_dist_copied_;
     std::string odom_frame_id_;
+    std_msgs::msg::Header latest_input_header_;
+    simple_loop_closure::FastLivo2Contract input_contract_;
 
     size_t added_odom_id_;
     size_t searched_loop_id_;
@@ -122,6 +135,12 @@ private:
     double fitness_score_th_;
     int vis_map_cloud_frame_interval_;
 
+    bool inputContractValid(
+        const sensor_msgs::msg::PointCloud2 &cloud_msg,
+        const nav_msgs::msg::Odometry &odom_msg) const;
+
+    bool cloudSchemaValid(const sensor_msgs::msg::PointCloud2 &cloud_msg) const;
+
     std::atomic<bool> stop_loop_closure_thread_;
     std::atomic<bool> stop_visualize_thread_;
 
@@ -149,6 +168,8 @@ private:
     void publishMapCloud(const PointCloudType::Ptr &map_cloud);
 
     void constructVisualizationOdometryEdges(const int &res_size, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
+
+    void constructVisualizationOriginalEdges(const int &res_size, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
 
     void constructVisualizationLoopEdges(const int &res_size, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
 
@@ -185,7 +206,7 @@ public:
 
     SimpleLoopClosureNode();
 
-    ~SimpleLoopClosureNode() = default;
+    ~SimpleLoopClosureNode();
 
     void spin();
 };

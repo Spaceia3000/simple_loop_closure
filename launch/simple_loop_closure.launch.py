@@ -10,8 +10,11 @@ def generate_launch_description():
     ld = LaunchDescription()
     package_dir = get_package_share_directory('simple_loop_closure')
     default_params_file = os.path.join(package_dir, 'config', 'simple_loop_closure.yaml')
-    default_odometry_topic="/lm/odom_node/odom"
-    default_cloud_topic = "/lm/odom_node/pointcloud/deskewed"
+    # FAST-LIVO2's metric cloud is in camera_init and has the exact same
+    # measurement stamp as /aft_mapped_to_init. /cloud_registered is not an
+    # equivalent input because it is stamped with the node clock.
+    default_odometry_topic = "/aft_mapped_to_init"
+    default_cloud_topic = "/cloud_registered_metric"
 
     arg_loop_closure_params_file = LaunchConfiguration('loop_closure_params_file')
     arg_odometry_topic = LaunchConfiguration('odometry_topic')

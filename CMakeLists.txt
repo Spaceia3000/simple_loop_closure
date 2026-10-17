@@ -22,10 +22,15 @@ find_package(pcl_conversions REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(tf2_eigen REQUIRED)
+find_path(NANOFLANN_INCLUDE_DIR NAMES nanoflann.hpp
+  HINTS ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/nanoflann/include
+  REQUIRED
+)
 
 include_directories(
   include
-  thirdparty/nanoflann/include
+  ${NANOFLANN_INCLUDE_DIR}
   ${GTSAM_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
   ${Boost_INCLUDE_DIR}
@@ -38,13 +43,12 @@ add_definitions(${PCL_DEFINITIONS})
 add_executable(${PROJECT_NAME}_node src/simple_loop_closure_node.cpp)
 ament_target_dependencies(${PROJECT_NAME}_node
   "pcl_conversions"
-  "rcl_interfaces"
   "rclcpp"
-  "rcutils"
   "sensor_msgs"
   "nav_msgs"
   "std_msgs"
   "geometry_msgs"
+  "message_filters"
   "pcl_ros"
   "visualization_msgs"
   "tf2"
@@ -88,5 +92,22 @@ install(TARGETS
 install(DIRECTORY config launch 
   DESTINATION share/${PROJECT_NAME} 
 )
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_gtest(test_fast_livo2_contract test/test_fast_livo2_contract.cpp)
+  target_include_directories(test_fast_livo2_contract PRIVATE include)
+  target_link_libraries(test_fast_livo2_contract Eigen3::Eigen)
+  # This host has an incompatible globally installed third-party pytest plugin.
+  # Disable plugin auto-loading so the package's self-contained tests remain
+  # deterministic in both CMake's discovery probe and the test invocation.
+  set(ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD} 1)
+  ament_add_pytest_test(test_launch_contract test/test_launch_contract.py
+    ENV
+      "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
+      "ROS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/ros_test_logs"
+  )
+endif()
 
 ament_package()

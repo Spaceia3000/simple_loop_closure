@@ -5,11 +5,30 @@ SimpleLoopClosureNode::SimpleLoopClosureNode() : Node("simple_loop_closure")
   initialize();
 }
 
+SimpleLoopClosureNode::~SimpleLoopClosureNode()
+{
+  stop_loop_closure_thread_ = true;
+  stop_visualize_thread_ = true;
+
+  if (loop_close_thread_.joinable())
+    loop_close_thread_.join();
+  if (visualize_thread_.joinable())
+    visualize_thread_.join();
+  if (save_thread_.joinable())
+    save_thread_.join();
+}
+
 void SimpleLoopClosureNode::initialize()
 {
   pub_map_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/pgo_map_cloud", 1);
   pub_vis_pose_graph_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/vis_pose_graph", 1);
   pub_pgo_odometry_ = this->create_publisher<nav_msgs::msg::Odometry>("/pgo_odom", 1);
+  pub_original_keyframes_ = this->create_publisher<visualization_msgs::msg::Marker>(
+      "/simple_loop_closure/original_keyframes", 1);
+  pub_optimized_keyframes_ = this->create_publisher<visualization_msgs::msg::Marker>(
+      "/simple_loop_closure/optimized_keyframes", 1);
+  pub_loop_edges_ = this->create_publisher<visualization_msgs::msg::Marker>(
+      "/simple_loop_closure/loop_edges", 1);
 
   this->declare_parameter<bool>("mapped_cloud", true);
   this->declare_parameter<double>("time_stamp_tolerance", 0.01);
@@ -26,6 +45,9 @@ void SimpleLoopClosureNode::initialize()
   this->declare_parameter<double>("vis_map_voxel_leaf_size", 0.8);
   this->declare_parameter<double>("fitness_score_th", 0.3);
   this->declare_parameter<int>("vis_map_cloud_frame_interval", 3);
+  this->declare_parameter<std::string>("expected_fixed_frame", "camera_init");
+  this->declare_parameter<std::string>("expected_body_frame", "aft_mapped");
+  this->declare_parameter<bool>("require_exact_timestamps", true);
 
   this->get_parameter("mapped_cloud", mapped_cloud_);
   this->get_parameter("time_stamp_tolerance", time_stamp_tolerance_);
@@ -42,6 +64,19 @@ void SimpleLoopClosureNode::initialize()
   this->get_parameter("vis_map_voxel_leaf_size", vis_map_voxel_leaf_size_);
   this->get_parameter("fitness_score_th", fitness_score_th_);
   this->get_parameter("vis_map_cloud_frame_interval", vis_map_cloud_frame_interval_);
+  this->get_parameter("expected_fixed_frame", input_contract_.fixed_frame);
+  this->get_parameter("expected_body_frame", input_contract_.body_frame);
+  this->get_parameter("require_exact_timestamps", input_contract_.require_exact_stamp);
+
+  if (!mapped_cloud_)
+    throw std::invalid_argument(
+        "mapped_cloud must be true for the global /cloud_registered_metric input");
+  if (input_contract_.fixed_frame.empty() || input_contract_.body_frame.empty())
+    throw std::invalid_argument("expected FAST-LIVO2 frames must not be empty");
+  if (input_contract_.fixed_frame == input_contract_.body_frame)
+    throw std::invalid_argument("expected FAST-LIVO2 fixed and body frames must differ");
+  if (time_stamp_tolerance_ < 0.0)
+    throw std::invalid_argument("time_stamp_tolerance must not be negative");
 
   search_radius_ *= search_radius_;
   stop_loop_closure_thread_ = false;
@@ -85,13 +120,13 @@ void SimpleLoopClosureNode::initialize()
   odom_noise_vector << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4;
   odom_noise_ = gtsam::noiseModel::Diagonal::Variances(odom_noise_vector);
 
-  odom_edge_color_.r = 0.0;
-  odom_edge_color_.g = 0.75;
+  odom_edge_color_.r = 1.0;
+  odom_edge_color_.g = 0.0;
   odom_edge_color_.b = 1.0;
   odom_edge_color_.a = 1.0;
 
   loop_edge_color_.r = 1.0;
-  loop_edge_color_.g = 0.75;
+  loop_edge_color_.g = 0.0;
   loop_edge_color_.b = 0.0;
   loop_edge_color_.a = 1.0;
 
@@ -110,6 +145,36 @@ void SimpleLoopClosureNode::initialize()
   visualize_thread_ = std::thread(&SimpleLoopClosureNode::visualizeThread, this);
 
   RCLCPP_INFO(this->get_logger(), "Loop Closure Node Initialized.");
+}
+
+bool SimpleLoopClosureNode::inputContractValid(
+    const sensor_msgs::msg::PointCloud2& cloud_msg,
+    const nav_msgs::msg::Odometry& odom_msg) const
+{
+  const auto& position = odom_msg.pose.pose.position;
+  const auto& orientation = odom_msg.pose.pose.orientation;
+  const bool frames_match = input_contract_.framesMatch(
+      cloud_msg.header.frame_id, odom_msg.header.frame_id, odom_msg.child_frame_id);
+  const bool stamps_match = input_contract_.stampsMatch(
+      rclcpp::Time(cloud_msg.header.stamp).nanoseconds(),
+      rclcpp::Time(odom_msg.header.stamp).nanoseconds());
+  const bool pose_valid = input_contract_.poseIsValid(
+      position.x, position.y, position.z,
+      orientation.x, orientation.y, orientation.z, orientation.w);
+  return frames_match && stamps_match && pose_valid && cloudSchemaValid(cloud_msg);
+}
+
+bool SimpleLoopClosureNode::cloudSchemaValid(
+    const sensor_msgs::msg::PointCloud2& cloud_msg) const
+{
+  if (cloud_msg.width == 0 || cloud_msg.height == 0 || cloud_msg.data.empty())
+    return false;
+
+  const std::size_t expected_data_size =
+      static_cast<std::size_t>(cloud_msg.row_step) * cloud_msg.height;
+  return input_contract_.cloudFieldsMatch(
+             cloud_msg.fields, sensor_msgs::msg::PointField::FLOAT32) &&
+         expected_data_size <= cloud_msg.data.size();
 }
 
 void makeDirectory(const std::string& directory)
@@ -251,6 +316,16 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr& cloud_msg,
     const nav_msgs::msg::Odometry::ConstSharedPtr& odom_msg)
 {
+  if (!inputContractValid(*cloud_msg, *odom_msg))
+  {
+    RCLCPP_ERROR(
+        this->get_logger(),
+        "Rejecting FAST-LIVO2 pair: cloud frame='%s', odom frame='%s', child='%s', cloud stamp=%ld, odom stamp=%ld",
+        cloud_msg->header.frame_id.c_str(), odom_msg->header.frame_id.c_str(), odom_msg->child_frame_id.c_str(),
+        rclcpp::Time(cloud_msg->header.stamp).nanoseconds(), rclcpp::Time(odom_msg->header.stamp).nanoseconds());
+    return;
+  }
+
   PointCloudType::Ptr cloud_curr(new PointCloudType);
   pcl::fromROSMsg(*cloud_msg, *cloud_curr);
 
@@ -281,6 +356,7 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     PointCloudType::Ptr cloud_base(new PointCloudType);
     Eigen::Affine3d affine_inv = affine_curr->inverse();
     pcl::transformPointCloud(*cloud_curr, *cloud_base, affine_inv);
+    cloud_base->header.frame_id = input_contract_.body_frame;
     cloud_curr = cloud_base;
   }
 
@@ -294,6 +370,7 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
 
     keyframes_cloud_.push_back(cloud_curr);
     keyframes_odom_.push_back(affine_curr);
+    latest_input_header_ = odom_msg->header;
   }
 }
 
@@ -345,8 +422,13 @@ void SimpleLoopClosureNode::publishMapCloud(const PointCloudType::Ptr& map_cloud
 
   sensor_msgs::msg::PointCloud2 map_cloud_msg;
   pcl::toROSMsg(map_cloud_ds_, map_cloud_msg);
-  map_cloud_msg.header.stamp = this->now();
-  map_cloud_msg.header.frame_id = odom_frame_id_;
+  {
+    MtxLockGuard guard(mtx_buf_);
+    map_cloud_msg.header = latest_input_header_;
+  }
+
+  if (map_cloud_msg.header.frame_id != input_contract_.fixed_frame)
+    return;
 
   pub_map_cloud_->publish(map_cloud_msg);
 }
@@ -356,7 +438,7 @@ void SimpleLoopClosureNode::constructVisualizationOdometryEdges(const int& res_s
                                                                 visualization_msgs::msg::Marker& marker_msg)
 {
   marker_msg.header = header;
-  marker_msg.ns = "odom_edges";
+  marker_msg.ns = "optimized_keyframes";
   marker_msg.action = visualization_msgs::msg::Marker::ADD;
   marker_msg.pose.orientation.w = 1.0;
   marker_msg.id = 0;
@@ -381,6 +463,36 @@ void SimpleLoopClosureNode::constructVisualizationOdometryEdges(const int& res_s
     p2.z = pose2.z();
     marker_msg.points.emplace_back(p1);
     marker_msg.points.emplace_back(p2);
+  }
+}
+
+void SimpleLoopClosureNode::constructVisualizationOriginalEdges(
+    const int& res_size, const std_msgs::msg::Header& header,
+    visualization_msgs::msg::Marker& marker_msg)
+{
+  marker_msg.header = header;
+  marker_msg.ns = "original_keyframes";
+  marker_msg.action = visualization_msgs::msg::Marker::ADD;
+  marker_msg.pose.orientation.w = 1.0;
+  marker_msg.id = 0;
+  marker_msg.type = visualization_msgs::msg::Marker::LINE_STRIP;
+  marker_msg.scale.x = edge_scale_;
+  marker_msg.color.r = 0.0;
+  marker_msg.color.g = 1.0;
+  marker_msg.color.b = 1.0;
+  marker_msg.color.a = 1.0;
+
+  marker_msg.points.clear();
+  marker_msg.points.reserve(res_size);
+  MtxLockGuard guard(mtx_buf_);
+  const int original_size = std::min(res_size, static_cast<int>(keyframes_odom_copied_.size()));
+  for (int i = 0; i < original_size; ++i)
+  {
+    geometry_msgs::msg::Point point;
+    point.x = keyframes_odom_copied_[i]->translation().x();
+    point.y = keyframes_odom_copied_[i]->translation().y();
+    point.z = keyframes_odom_copied_[i]->translation().z();
+    marker_msg.points.emplace_back(point);
   }
 }
 
@@ -470,17 +582,24 @@ void SimpleLoopClosureNode::publishVisualizationGraph()
     return;
 
   std_msgs::msg::Header header;
-  rclcpp::Time t = this->now();
-  header.stamp = t;
-  header.frame_id = odom_frame_id_;
+  {
+    MtxLockGuard guard(mtx_buf_);
+    header = latest_input_header_;
+  }
+  if (header.frame_id != input_contract_.fixed_frame)
+    return;
 
   visualization_msgs::msg::MarkerArray marker_array_msg;
-  marker_array_msg.markers.resize(3);
-  constructVisualizationOdometryEdges(optimization_result_size, header, marker_array_msg.markers[0]);
-  constructVisualizationLoopEdges(optimization_result_size, header, marker_array_msg.markers[1]);
-  constructVisualizationNodes(optimization_result_size, header, marker_array_msg.markers[2]);
+  marker_array_msg.markers.resize(4);
+  constructVisualizationOriginalEdges(optimization_result_size, header, marker_array_msg.markers[0]);
+  constructVisualizationOdometryEdges(optimization_result_size, header, marker_array_msg.markers[1]);
+  constructVisualizationLoopEdges(optimization_result_size, header, marker_array_msg.markers[2]);
+  constructVisualizationNodes(optimization_result_size, header, marker_array_msg.markers[3]);
 
   pub_vis_pose_graph_->publish(marker_array_msg);
+  pub_original_keyframes_->publish(marker_array_msg.markers[0]);
+  pub_optimized_keyframes_->publish(marker_array_msg.markers[1]);
+  pub_loop_edges_->publish(marker_array_msg.markers[2]);
 }
 
 void SimpleLoopClosureNode::copyKeyFrames()
@@ -571,8 +690,13 @@ int SimpleLoopClosureNode::searchTarget(const KDTree& kdtree, const int& id_quer
 {
   NanoFlannSearchResult search_result;
   search_result.reserve(1000);
+#if NANOFLANN_VERSION >= 0x150
   nanoflann::SearchParameters search_params(0.0, true);
   kdtree.index_->radiusSearch(pose_query.translation().data(), search_radius_, search_result, search_params);
+#else
+  nanoflann::SearchParams search_params(0, 0.0, true);
+  kdtree.index->radiusSearch(pose_query.translation().data(), search_radius_, search_result, search_params);
+#endif
 
   Eigen::Quaterniond quat_query(pose_query.rotation());
 
@@ -608,14 +732,18 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr SimpleLoopClosureNode::constructTargetCloud
   pcl::PointCloud<pcl::PointXYZI>::Ptr target_cloud(new PointCloudType);
   pcl::PointCloud<pcl::PointXYZI>::Ptr target_cloud_ds(new PointCloudType);
 
-  for (size_t i = target_id - target_frame_num_; i <= target_id + target_frame_num_; ++i)
+  int optimization_result_size;
+  {
+    MtxLockGuard guard(mtx_res_);
+    optimization_result_size = static_cast<int>(optimization_result_.size());
+  }
+  const int first_id = std::max(0, target_id - target_frame_num_);
+  const int last_id = std::min(optimization_result_size - 1, target_id + target_frame_num_);
+  for (int i = first_id; i <= last_id; ++i)
   {
     Eigen::Affine3d tmp_affine;
     {
       MtxLockGuard guard(mtx_res_);
-      if (i < 0 || i >= optimization_result_.size())
-        continue;
-
       tmp_affine = Eigen::Affine3d(optimization_result_.at<gtsam::Pose3>(i).matrix());
     }
 
@@ -684,7 +812,11 @@ bool SimpleLoopClosureNode::constructLoopEdge(gtsam::NonlinearFactorGraph& graph
     return false;
 
   KDTree kdtree(3, std::cref(kdtree_mat), 10);
+#if NANOFLANN_VERSION >= 0x150
   kdtree.index_->buildIndex();
+#else
+  kdtree.index->buildIndex();
+#endif
 
   Eigen::Affine3d optimized_pose_last;
   int optimized_pose_id_last;

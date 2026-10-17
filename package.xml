@@ -8,6 +8,10 @@
 
   <license>BSD</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>boost</depend>
+  <depend>eigen</depend>
+  <depend>gtsam</depend>
+  <depend>libnanoflann-dev</depend>
   <build_depend>geometry_msgs</build_depend>
   <build_depend>message_filters</build_depend>
   <build_depend>nav_msgs</build_depend>
@@ -41,6 +45,8 @@
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>tf2</exec_depend>
   <exec_depend>tf2_eigen</exec_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

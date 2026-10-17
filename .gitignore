@@ -1,0 +1,7 @@
+.codex_native/
+.pytest_cache/
+build/
+install/
+log/
+__pycache__/
+*.py[cod]
