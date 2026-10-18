@@ -97,6 +97,7 @@ struct StreamAudit
 struct StreamAuditSnapshot
 {
   StreamAudit audit;
+  std::string pgo_publisher_qos{"unknown"};
   std::uint64_t keyframes_stored{0};
   std::uint64_t loop_factors{0};
 };
@@ -186,12 +187,12 @@ inline std::string formatStreamAuditReport(
                                                  : "FAIL";
 
   std::ostringstream out;
-  out << "SC_SIMPLE_STREAM_AUDIT version=6 report=" << report_kind
+  out << "SC_SIMPLE_STREAM_AUDIT version=7 report=" << report_kind
       << " status=" << status
       << " status_scope=internal_call_and_stage_accounting"
       << " external_source_count=not_observed"
       << " pgo_recorder=external_compare_required"
-      << " pgo_publisher_qos=reliable_keep_last_1"
+      << " pgo_publisher_qos=" << snapshot.pgo_publisher_qos
       << " dds_delivery_status=INCONCLUSIVE"
       << " pgo_publish_completed_semantics=rclcpp_publish_returned_normally";
   appendTimestampSequence(out, "cloud_ingress", audit.cloud_ingress);

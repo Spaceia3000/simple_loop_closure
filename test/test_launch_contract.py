@@ -74,6 +74,32 @@ def test_exact_time_policy_uses_validated_experimental_queue():
     assert "setMaxIntervalDuration" not in source
 
 
+def test_pgo_output_depth_is_bounded_baseline_default_and_only_configures_pgo():
+    root = Path(__file__).parents[1]
+    config = (root / "config" / "simple_loop_closure.yaml").read_text()
+    source = (root / "src" / "simple_loop_closure_node.cpp").read_text()
+
+    assert "pgo_output_depth: 1" in config
+    assert 'declare_parameter<std::int64_t>("pgo_output_depth", 1)' in source
+    assert 'get_parameter("pgo_output_depth", pgo_output_depth_)' in source
+    assert "validatePgoOutputDepth(pgo_output_depth_)" in source
+    assert source.index("validatePgoOutputDepth(pgo_output_depth_)") < source.index(
+        'create_publisher<nav_msgs::msg::Odometry>(\n      "/pgo_odom", rclcpp::QoS(validated_pgo_output_depth))'
+    )
+    assert source.count("rclcpp::QoS(validated_pgo_output_depth)") == 1
+    assert "pub_pgo_odometry_->get_actual_qos()" in source
+    for unchanged_endpoint in (
+        'create_publisher<sensor_msgs::msg::PointCloud2>("/pgo_map_cloud", 1)',
+        'create_publisher<visualization_msgs::msg::MarkerArray>("/vis_pose_graph", 1)',
+        '"/simple_loop_closure/original_keyframes", 1',
+        '"/simple_loop_closure/optimized_keyframes", 1',
+        '"/simple_loop_closure/loop_edges", 1',
+        'sub_cloud_.subscribe(this, "/cloud")',
+        'sub_odom_.subscribe(this, "/odometry")',
+    ):
+        assert unchanged_endpoint in source
+
+
 def test_humble_manifest_declares_direct_adapter_dependencies():
     root = ET.parse(Path(__file__).parents[1] / "package.xml").getroot()
     dependencies = {
@@ -98,7 +124,7 @@ def test_stream_audit_taps_ingress_before_sync_and_is_opt_in():
 
 def test_pgo_publish_attempt_return_and_failure_boundaries_are_explicit():
     source = (Path(__file__).parents[1] / "src" / "simple_loop_closure_node.cpp").read_text()
-    publisher = 'create_publisher<nav_msgs::msg::Odometry>("/pgo_odom", 1)'
+    publisher = 'create_publisher<nav_msgs::msg::Odometry>(\n      "/pgo_odom", rclcpp::QoS(validated_pgo_output_depth))'
     attempted = "audit.pgo_publish_attempted.observe("
     completed = "audit.pgo_publish_completed.observe("
     failed = "audit.pgo_publish_failed.observe("

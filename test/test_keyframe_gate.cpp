@@ -219,6 +219,21 @@ TEST(SyncQueueSize, EnforcesOperationalMemorySafetyBoundaries)
       std::invalid_argument);
 }
 
+TEST(PgoOutputDepth, EnforcesOperationalResourceBoundaries)
+{
+  EXPECT_THROW(simple_loop_closure::validatePgoOutputDepth(0), std::invalid_argument);
+  EXPECT_EQ(simple_loop_closure::validatePgoOutputDepth(1), 1U);
+  EXPECT_EQ(simple_loop_closure::validatePgoOutputDepth(10), 10U);
+  EXPECT_EQ(simple_loop_closure::validatePgoOutputDepth(100), 100U);
+  EXPECT_EQ(
+      simple_loop_closure::validatePgoOutputDepth(simple_loop_closure::kMaxPgoOutputDepth),
+      1024U);
+  EXPECT_THROW(simple_loop_closure::validatePgoOutputDepth(1025), std::invalid_argument);
+  EXPECT_THROW(
+      simple_loop_closure::validatePgoOutputDepth(std::numeric_limits<std::int64_t>::max()),
+      std::invalid_argument);
+}
+
 TEST(KeyframeGate, ThresholdCrossingsRemainConsistentAcrossAuditedStages)
 {
   const Eigen::Affine3d previous = pose();

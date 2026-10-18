@@ -139,6 +139,7 @@ private:
     bool mapped_cloud_;
     double time_stamp_tolerance_;
     std::int64_t sync_queue_size_;
+    std::int64_t pgo_output_depth_;
     double keyframe_dist_th_;
     double keyframe_angular_dist_th_;
     double loop_search_time_diff_th_;

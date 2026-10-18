@@ -13,6 +13,25 @@ void requestStagedShutdown(int)
   shutdown_signal_received = 1;
 }
 
+std::string formatPublisherQos(const rclcpp::QoS& qos)
+{
+  const rmw_qos_profile_t& profile = qos.get_rmw_qos_profile();
+  const char* reliability =
+      profile.reliability == RMW_QOS_POLICY_RELIABILITY_RELIABLE ? "reliable" :
+      profile.reliability == RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT ? "best_effort" :
+      "unknown_reliability";
+  const char* history =
+      profile.history == RMW_QOS_POLICY_HISTORY_KEEP_LAST ? "keep_last" :
+      profile.history == RMW_QOS_POLICY_HISTORY_KEEP_ALL ? "keep_all" :
+      "unknown_history";
+
+  std::ostringstream description;
+  description << reliability << '_' << history;
+  if (profile.history == RMW_QOS_POLICY_HISTORY_KEEP_LAST)
+    description << '_' << profile.depth;
+  return description.str();
+}
+
 }  // namespace
 
 SimpleLoopClosureNode::SimpleLoopClosureNode() : Node("simple_loop_closure")
@@ -31,7 +50,6 @@ void SimpleLoopClosureNode::initialize()
 {
   pub_map_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/pgo_map_cloud", 1);
   pub_vis_pose_graph_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/vis_pose_graph", 1);
-  pub_pgo_odometry_ = this->create_publisher<nav_msgs::msg::Odometry>("/pgo_odom", 1);
   pub_original_keyframes_ = this->create_publisher<visualization_msgs::msg::Marker>(
       "/simple_loop_closure/original_keyframes", 1);
   pub_optimized_keyframes_ = this->create_publisher<visualization_msgs::msg::Marker>(
@@ -42,6 +60,7 @@ void SimpleLoopClosureNode::initialize()
   this->declare_parameter<bool>("mapped_cloud", true);
   this->declare_parameter<double>("time_stamp_tolerance", 0.01);
   this->declare_parameter<std::int64_t>("sync_queue_size", 50);
+  this->declare_parameter<std::int64_t>("pgo_output_depth", 1);
   this->declare_parameter<double>("keyframe_dist_th", 0.3);
   this->declare_parameter<double>("keyframe_angular_dist_th", 0.2);
   this->declare_parameter<double>("loop_search_time_diff_th", 30.0);
@@ -63,6 +82,7 @@ void SimpleLoopClosureNode::initialize()
   this->get_parameter("mapped_cloud", mapped_cloud_);
   this->get_parameter("time_stamp_tolerance", time_stamp_tolerance_);
   this->get_parameter("sync_queue_size", sync_queue_size_);
+  this->get_parameter("pgo_output_depth", pgo_output_depth_);
   this->get_parameter("keyframe_dist_th", keyframe_dist_th_);
   this->get_parameter("keyframe_angular_dist_th", keyframe_angular_dist_th_);
   this->get_parameter("loop_search_time_diff_th", loop_search_time_diff_th_);
@@ -93,8 +113,13 @@ void SimpleLoopClosureNode::initialize()
       vis_map_cloud_frame_interval_);
   const std::uint32_t validated_sync_queue_size =
       simple_loop_closure::validateSyncQueueSize(sync_queue_size_);
+  const std::uint32_t validated_pgo_output_depth =
+      simple_loop_closure::validatePgoOutputDepth(pgo_output_depth_);
   if (loop_search_frame_interval_ < 0)
     throw std::invalid_argument("loop_search_frame_interval must not be negative");
+
+  pub_pgo_odometry_ = this->create_publisher<nav_msgs::msg::Odometry>(
+      "/pgo_odom", rclcpp::QoS(validated_pgo_output_depth));
 
   search_radius_ *= search_radius_;
   stop_loop_closure_thread_ = false;
@@ -204,6 +229,7 @@ simple_loop_closure::StreamAuditSnapshot SimpleLoopClosureNode::captureStreamAud
   simple_loop_closure::StreamAuditSnapshot snapshot;
   std::scoped_lock guard(stream_audit_context_->mutex, mtx_buf_, mtx_res_);
   snapshot.audit = stream_audit_context_->audit;
+  snapshot.pgo_publisher_qos = formatPublisherQos(pub_pgo_odometry_->get_actual_qos());
   snapshot.keyframes_stored = keyframes_odom_.size();
   snapshot.loop_factors = loop_edges_.size();
   return snapshot;

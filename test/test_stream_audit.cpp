@@ -178,7 +178,8 @@ TEST(StreamAudit, CompletedCallReturnsCanBeComparedWithExternalRecorderCountAndD
 
 TEST(StreamAudit, ShutdownReportLabelsExternalRecorderComparison)
 {
-  const simple_loop_closure::StreamAuditSnapshot snapshot;
+  simple_loop_closure::StreamAuditSnapshot snapshot;
+  snapshot.pgo_publisher_qos = "reliable_keep_last_100";
   const std::string snapshot_line =
       simple_loop_closure::formatStreamAuditReport(snapshot, "snapshot");
   const std::string shutdown_line =
@@ -190,10 +191,10 @@ TEST(StreamAudit, ShutdownReportLabelsExternalRecorderComparison)
   EXPECT_EQ(shutdown_line.find('\n'), std::string::npos);
   EXPECT_EQ(shutdown_line.find('\r'), std::string::npos);
   EXPECT_EQ(
-      shutdown_line.rfind("SC_SIMPLE_STREAM_AUDIT version=6 report=shutdown status=NO_DATA", 0),
+      shutdown_line.rfind("SC_SIMPLE_STREAM_AUDIT version=7 report=shutdown status=NO_DATA", 0),
       0U);
   EXPECT_NE(shutdown_line.find(" pgo_recorder=external_compare_required"), std::string::npos);
-  EXPECT_NE(shutdown_line.find(" pgo_publisher_qos=reliable_keep_last_1"), std::string::npos);
+  EXPECT_NE(shutdown_line.find(" pgo_publisher_qos=reliable_keep_last_100"), std::string::npos);
   EXPECT_NE(shutdown_line.find(" dds_delivery_status=INCONCLUSIVE"), std::string::npos);
   EXPECT_EQ(shutdown_line.find(" status=PASS"), std::string::npos);
 }

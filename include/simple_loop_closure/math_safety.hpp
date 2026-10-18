@@ -31,6 +31,17 @@ inline std::uint32_t validateSyncQueueSize(const std::int64_t sync_queue_size)
   return static_cast<std::uint32_t>(sync_queue_size);
 }
 
+// Operational resource cap, not an empirically selected delivery setting.
+inline constexpr std::uint32_t kMaxPgoOutputDepth = 1024U;
+
+inline std::uint32_t validatePgoOutputDepth(const std::int64_t pgo_output_depth)
+{
+  if (pgo_output_depth <= 0 ||
+      static_cast<std::uint64_t>(pgo_output_depth) > kMaxPgoOutputDepth)
+    throw std::invalid_argument("pgo_output_depth must be in the operational safety range [1, 1024]");
+  return static_cast<std::uint32_t>(pgo_output_depth);
+}
+
 inline void validateMathSafetyParameters(
     const double keyframe_distance_threshold,
     const double keyframe_angular_threshold,
