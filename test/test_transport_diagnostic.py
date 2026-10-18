@@ -206,6 +206,129 @@ def test_playback_timeout_is_opt_in():
     assert args.playback_timeout_sec is None
 
 
+def test_recorder_qos_yaml_parser_is_opt_in_and_preserves_argument():
+    base = [
+        "run", "--bag", "bag", "--output-dir", "out", "--domain-id", "166",
+        "--subscriber-qos-profile", "reliable",
+    ]
+
+    assert runner.parser().parse_args(base).recorder_qos_yaml is None
+    args = runner.parser().parse_args(
+        base + ["--recorder-qos-yaml", "relative/recorder-qos.yaml"]
+    )
+    assert args.recorder_qos_yaml == Path("relative/recorder-qos.yaml")
+
+
+def test_run_rejects_missing_recorder_qos_yaml_before_bag_or_output(
+    tmp_path, monkeypatch
+):
+    output = tmp_path / "out"
+    args = runner.parser().parse_args(
+        [
+            "run", "--bag", str(tmp_path / "source"), "--output-dir", str(output),
+            "--domain-id", "166", "--subscriber-qos-profile", "reliable",
+            "--recorder-qos-yaml", str(tmp_path / "missing.yaml"),
+        ]
+    )
+    inspect = Mock(side_effect=AssertionError("source bag must not be inspected"))
+    monkeypatch.setattr(runner, "inspect_bag", inspect)
+
+    with pytest.raises(diagnostic.DiagnosticError, match="recorder QoS YAML does not exist"):
+        runner.run_diagnostic(args)
+
+    inspect.assert_not_called()
+    assert not output.exists()
+
+
+def test_recorder_qos_override_is_owned_only_by_recorder_and_manifest(
+    tmp_path, monkeypatch
+):
+    class FakeProcess:
+        next_pid = 500
+
+        def __init__(self, command):
+            self.args = command
+            self.pid = FakeProcess.next_pid
+            FakeProcess.next_pid += 1
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+        def send_signal(self, _sent_signal):
+            pass
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+    monkeypatch.chdir(tmp_path)
+    qos_argument = Path("profiles/recorder-cloud-100.yaml")
+    qos_path = tmp_path / qos_argument
+    qos_path.parent.mkdir()
+    qos_content = "/cloud:\n  subscription:\n    depth: 100\n"
+    qos_path.write_text(qos_content, encoding="utf-8")
+    source = {CLOUD: [{"header_ns": 1}], ODOM: [{"header_ns": 1}]}
+    started = []
+
+    def fake_start(command, _log, _env):
+        copied_command = list(command)
+        started.append(copied_command)
+        return FakeProcess(copied_command), BytesIO()
+
+    def fake_audit(*audit_args, run_evidence):
+        report = {"run_evidence": run_evidence}
+        runner.write_json(audit_args[3], report)
+        return report
+
+    monkeypatch.setattr(runner, "inspect_bag", lambda *_args: source)
+    monkeypatch.setattr(runner, "bag_content_duration_seconds", lambda _bag: 1.0)
+    monkeypatch.setattr(runner, "read_udp_counters", lambda: {})
+    monkeypatch.setattr(runner, "snapshot_endpoints", lambda *_args: None)
+    monkeypatch.setattr(runner, "start_logged", fake_start)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner.time, "monotonic", Mock(side_effect=[10.0, 10.0, 11.0]))
+    monkeypatch.setattr(runner, "audit_artifacts", fake_audit)
+
+    output = tmp_path / "out"
+    args = runner.parser().parse_args(
+        [
+            "run", "--bag", "source", "--output-dir", str(output),
+            "--domain-id", "166", "--subscriber-qos-profile", "reliable",
+            "--cloud-topic", CLOUD, "--odom-topic", ODOM, "--pgo-topic", PGO,
+            "--recorder-qos-yaml", str(qos_argument), "--startup-sec", "0.01",
+            "--endpoint-snapshot-delay-sec", "0.01", "--drain-sec", "0.01",
+            "--shutdown-timeout-sec", "0.01",
+        ]
+    )
+
+    assert runner.run_diagnostic(args) == 0
+
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    commands = manifest["commands"]
+    expected_suffix = ["--qos-profile-overrides-path", str(qos_argument)]
+    assert commands["recorder"][-2:] == expected_suffix
+    assert manifest["recorder_qos"] == {"yaml": str(qos_argument)}
+    assert manifest["source_bag"] == str((tmp_path / "source").resolve())
+    assert commands["playback"] == [
+        "ros2", "bag", "play", str((tmp_path / "source").resolve()), "--rate", "1.0"
+    ]
+    assert all(
+        "--qos-profile-overrides-path" not in commands[name]
+        for name in ("witness", "backend", "playback")
+    )
+    assert started == [
+        commands["witness"], commands["recorder"], commands["backend"], commands["playback"]
+    ]
+    assert qos_path.read_text(encoding="utf-8") == qos_content
+
+
 def test_wait_for_playback_uses_remaining_timeout_and_records_elapsed(monkeypatch):
     process = Mock()
     process.wait.return_value = 0

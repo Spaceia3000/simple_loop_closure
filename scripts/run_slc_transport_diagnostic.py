@@ -71,6 +71,11 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--domain-id", type=_domain_id, required=True)
     run.add_argument("--subscriber-qos-profile", choices=("sensor-data", "reliable"), required=True)
     run.add_argument("--publisher-qos-yaml", type=Path)
+    run.add_argument(
+        "--recorder-qos-yaml",
+        type=Path,
+        help="optional existing rosbag2 recorder QoS override YAML",
+    )
     run.add_argument("--playback-rate", type=_positive, default=1.0)
     run.add_argument("--startup-sec", type=_positive, default=3.0)
     run.add_argument("--endpoint-snapshot-delay-sec", type=_positive, default=0.5)
@@ -483,6 +488,13 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             raise DiagnosticError(f"publisher QoS YAML does not exist: {qos_yaml}")
     else:
         qos_yaml = None
+    recorder_qos_argument = (
+        str(args.recorder_qos_yaml) if args.recorder_qos_yaml is not None else None
+    )
+    if args.recorder_qos_yaml is not None and not args.recorder_qos_yaml.is_file():
+        raise DiagnosticError(
+            f"recorder QoS YAML does not exist: {recorder_qos_argument}"
+        )
 
     topics = (args.cloud_topic, args.odom_topic, args.pgo_topic)
     source_inventory = inspect_bag(source_bag, topics[:2])
@@ -515,6 +527,8 @@ def run_diagnostic(args: argparse.Namespace) -> int:
         "ros2", "bag", "record", "--storage", "sqlite3", "--output", str(recorded_bag),
         args.cloud_topic, args.odom_topic, args.pgo_topic,
     ]
+    if recorder_qos_argument is not None:
+        recorder.extend(["--qos-profile-overrides-path", recorder_qos_argument])
     playback = ["ros2", "bag", "play", str(source_bag), "--rate", "1.0"]
     if qos_yaml:
         playback.extend(["--qos-profile-overrides-path", str(qos_yaml)])
@@ -533,6 +547,11 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             "reliable": "keep_last(100), reliable, volatile",
         },
         "publisher_qos": "rosbag2 default" if qos_yaml is None else {"yaml": str(qos_yaml)},
+        "recorder_qos": (
+            "rosbag2 default"
+            if recorder_qos_argument is None
+            else {"yaml": recorder_qos_argument}
+        ),
         "result_policy": {
             "fail_closed": True,
             "aborted_replay_pass_eligible": False,
