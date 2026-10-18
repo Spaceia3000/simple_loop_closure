@@ -1,11 +1,16 @@
 #include <simple_loop_closure/keyframe_gate.hpp>
+#include <simple_loop_closure/math_safety.hpp>
+#include <simple_loop_closure/stream_audit.hpp>
 
 #include <gtest/gtest.h>
 
 #include <Eigen/Geometry>
 
+#include <array>
+#include <cmath>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -21,6 +26,13 @@ Eigen::Affine3d pose(
 {
   Eigen::Affine3d result = Eigen::Affine3d::Identity();
   result.translation() = translation;
+  result.linear() = rotation.toRotationMatrix();
+  return result;
+}
+
+Eigen::Affine3d quaternionPose(const Eigen::Quaterniond &rotation)
+{
+  Eigen::Affine3d result = Eigen::Affine3d::Identity();
   result.linear() = rotation.toRotationMatrix();
   return result;
 }
@@ -84,6 +96,153 @@ TEST(KeyframeGate, EqualityAtEitherThresholdIsKeyframe)
 
   EXPECT_TRUE(distance_boundary.is_keyframe);
   EXPECT_TRUE(rotation_boundary.is_keyframe);
+}
+
+TEST(KeyframeGate, NextafterBracketsExactTranslationAndAngularEquality)
+{
+  const Eigen::Affine3d previous = pose();
+  const Eigen::Affine3d translated = pose(Eigen::Vector3d(kTranslationThreshold, 0.0, 0.0));
+  const auto translation_measurement = simple_loop_closure::decideKeyframe(
+      &previous, translated, 1.0, 1.0);
+  const double translation = translation_measurement.translation_distance;
+
+  EXPECT_TRUE(simple_loop_closure::decideKeyframe(
+      &previous, translated, std::nextafter(translation, 0.0), 1.0).is_keyframe);
+  EXPECT_TRUE(simple_loop_closure::decideKeyframe(
+      &previous, translated, translation, 1.0).is_keyframe);
+  EXPECT_FALSE(simple_loop_closure::decideKeyframe(
+      &previous, translated, std::nextafter(translation, 1.0), 1.0).is_keyframe);
+
+  const Eigen::Affine3d rotated = pose(
+      Eigen::Vector3d::Zero(), Eigen::AngleAxisd(kAngularThreshold, Eigen::Vector3d::UnitY()));
+  const auto angular_measurement = simple_loop_closure::decideKeyframe(
+      &previous, rotated, 1.0, 1.0);
+  const double angle = angular_measurement.angular_distance;
+
+  EXPECT_TRUE(simple_loop_closure::decideKeyframe(
+      &previous, rotated, 1.0, std::nextafter(angle, 0.0)).is_keyframe);
+  EXPECT_TRUE(simple_loop_closure::decideKeyframe(
+      &previous, rotated, 1.0, angle).is_keyframe);
+  EXPECT_FALSE(simple_loop_closure::decideKeyframe(
+      &previous, rotated, 1.0, std::nextafter(angle, 1.0)).is_keyframe);
+}
+
+TEST(KeyframeGate, QuaternionSignDoesNotChangeAngularDistanceOrDecision)
+{
+  const Eigen::Affine3d previous = pose();
+  Eigen::Quaterniond rotation(Eigen::AngleAxisd(0.25, Eigen::Vector3d::UnitZ()));
+  Eigen::Quaterniond negated = rotation;
+  negated.coeffs() *= -1.0;
+
+  const auto positive = simple_loop_closure::decideKeyframe(
+      &previous, quaternionPose(rotation), 1.0, kAngularThreshold);
+  const auto negative = simple_loop_closure::decideKeyframe(
+      &previous, quaternionPose(negated), 1.0, kAngularThreshold);
+
+  EXPECT_DOUBLE_EQ(positive.angular_distance, negative.angular_distance);
+  EXPECT_EQ(positive.is_keyframe, negative.is_keyframe);
+  EXPECT_TRUE(positive.is_keyframe);
+}
+
+TEST(KeyframeGate, WrappedYawAcrossPlusMinus179UsesShortestRotation)
+{
+  const double pi = std::acos(-1.0);
+  const double yaw_179 = 179.0 * pi / 180.0;
+  const Eigen::Affine3d positive = pose(
+      Eigen::Vector3d::Zero(), Eigen::AngleAxisd(yaw_179, Eigen::Vector3d::UnitZ()));
+  const Eigen::Affine3d negative = pose(
+      Eigen::Vector3d::Zero(), Eigen::AngleAxisd(-yaw_179, Eigen::Vector3d::UnitZ()));
+
+  const auto forward = simple_loop_closure::decideKeyframe(&positive, negative, 1.0, 0.04);
+  const auto reverse = simple_loop_closure::decideKeyframe(&negative, positive, 1.0, 0.04);
+
+  EXPECT_NEAR(forward.angular_distance, 2.0 * pi / 180.0, 1e-12);
+  EXPECT_DOUBLE_EQ(forward.angular_distance, reverse.angular_distance);
+  EXPECT_FALSE(forward.is_keyframe);
+  EXPECT_FALSE(reverse.is_keyframe);
+}
+
+TEST(KeyframeGate, ZeroThresholdPreservesInclusiveBoundarySemantics)
+{
+  const Eigen::Affine3d previous = pose();
+  const auto decision = simple_loop_closure::decideKeyframe(&previous, pose(), 0.0, 0.0);
+
+  EXPECT_TRUE(decision.is_keyframe);
+  EXPECT_DOUBLE_EQ(decision.translation_distance, 0.0);
+  EXPECT_DOUBLE_EQ(decision.angular_distance, 0.0);
+}
+
+TEST(MathSafetyParameters, RejectsEveryNonfiniteAndNegativeRequiredDomain)
+{
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double infinity = std::numeric_limits<double>::infinity();
+  const double negative = -std::numeric_limits<double>::denorm_min();
+
+  for (const double invalid : {nan, infinity, -infinity, negative})
+  {
+    EXPECT_THROW(
+        simple_loop_closure::validateMathSafetyParameters(invalid, 0.2, 0.01, 3),
+        std::invalid_argument);
+    EXPECT_THROW(
+        simple_loop_closure::validateMathSafetyParameters(0.3, invalid, 0.01, 3),
+        std::invalid_argument);
+    EXPECT_THROW(
+        simple_loop_closure::validateMathSafetyParameters(0.3, 0.2, invalid, 3),
+        std::invalid_argument);
+  }
+  EXPECT_THROW(
+      simple_loop_closure::validateMathSafetyParameters(0.3, 0.2, 0.01, -1),
+      std::invalid_argument);
+}
+
+TEST(MathSafetyParameters, AcceptsZeroAndFiniteNonnegativeBoundaries)
+{
+  EXPECT_NO_THROW(simple_loop_closure::validateMathSafetyParameters(0.0, 0.0, 0.0, 0));
+  EXPECT_NO_THROW(simple_loop_closure::validateMathSafetyParameters(
+      std::numeric_limits<double>::max(), std::numeric_limits<double>::max(),
+      std::numeric_limits<double>::max(), std::numeric_limits<int>::max()));
+}
+
+TEST(KeyframeGate, ThresholdCrossingsRemainConsistentAcrossAuditedStages)
+{
+  const Eigen::Affine3d previous = pose();
+  const std::array<double, 3> distances{
+      std::nextafter(kTranslationThreshold, 0.0),
+      kTranslationThreshold,
+      std::nextafter(kTranslationThreshold, 1.0)};
+  simple_loop_closure::StreamAuditSnapshot snapshot;
+
+  for (std::size_t index = 0; index < distances.size(); ++index)
+  {
+    const std::int64_t stamp = static_cast<std::int64_t>((index + 1) * 100);
+    const auto decision = simple_loop_closure::decideKeyframe(
+        &previous, pose(Eigen::Vector3d(distances[index], 0.0, 0.0)),
+        kTranslationThreshold, kAngularThreshold);
+    auto& audit = snapshot.audit;
+    audit.sync_callbacks.observe(stamp, stamp);
+    audit.contract_accepted.observe(stamp, stamp);
+    audit.pgo_publish_attempted.observe(stamp);
+    audit.pgo_publish_completed.observe(stamp);
+    if (decision.is_keyframe)
+    {
+      audit.keyframe_selected.observe(stamp);
+      audit.pcl_converted.observe(stamp, stamp);
+      audit.keyframes_inserted.observe(stamp);
+      ++snapshot.keyframes_stored;
+    }
+    else
+    {
+      audit.keyframe_skipped.observe(stamp);
+    }
+  }
+
+  EXPECT_EQ(snapshot.audit.keyframe_skipped.count, 1U);
+  EXPECT_EQ(snapshot.audit.keyframe_selected.count, 2U);
+  const std::string report =
+      simple_loop_closure::formatStreamAuditReport(snapshot, "snapshot");
+  EXPECT_NE(report.find(" status=PASS "), std::string::npos);
+  EXPECT_NE(report.find(" contract_accepted_to_pgo_attempted_ok=true"), std::string::npos);
+  EXPECT_NE(report.find(" selected_to_inserted_ok=true"), std::string::npos);
 }
 
 TEST(KeyframeGate, AcceptedKeyframeTrajectoryDistanceIsMonotonic)

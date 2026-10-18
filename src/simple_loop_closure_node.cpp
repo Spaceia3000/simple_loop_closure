@@ -1,4 +1,5 @@
 #include <simple_loop_closure/simple_loop_closure_node.hpp>
+#include <simple_loop_closure/math_safety.hpp>
 
 #include <csignal>
 
@@ -85,8 +86,9 @@ void SimpleLoopClosureNode::initialize()
     throw std::invalid_argument("expected FAST-LIVO2 frames must not be empty");
   if (input_contract_.fixed_frame == input_contract_.body_frame)
     throw std::invalid_argument("expected FAST-LIVO2 fixed and body frames must differ");
-  if (time_stamp_tolerance_ < 0.0)
-    throw std::invalid_argument("time_stamp_tolerance must not be negative");
+  simple_loop_closure::validateMathSafetyParameters(
+      keyframe_dist_th_, keyframe_angular_dist_th_, time_stamp_tolerance_,
+      vis_map_cloud_frame_interval_);
   if (loop_search_frame_interval_ < 0)
     throw std::invalid_argument("loop_search_frame_interval must not be negative");
 
@@ -379,13 +381,25 @@ void SimpleLoopClosureNode::publishPoseGraphOptimizedOdometry(const Eigen::Affin
 
   nav_msgs::msg::Odometry pgo_odom_msg = odom_msg;
   pgo_odom_msg.pose.pose = tf2::toMsg(pgo_affine);
-  if (stream_audit_context_)
+  if (!stream_audit_context_)
   {
-    std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
-    stream_audit_context_->audit.pgo_publish_calls.observe(
-        rclcpp::Time(pgo_odom_msg.header.stamp).nanoseconds());
+    pub_pgo_odometry_->publish(pgo_odom_msg);
+    return;
   }
-  pub_pgo_odometry_->publish(pgo_odom_msg);
+
+  const std::int64_t stamp_ns = rclcpp::Time(pgo_odom_msg.header.stamp).nanoseconds();
+  std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
+  stream_audit_context_->audit.pgo_publish_attempted.observe(stamp_ns);
+  try
+  {
+    pub_pgo_odometry_->publish(pgo_odom_msg);
+  }
+  catch (...)
+  {
+    stream_audit_context_->audit.pgo_publish_failed.observe(stamp_ns);
+    throw;
+  }
+  stream_audit_context_->audit.pgo_publish_completed.observe(stamp_ns);
 }
 
 void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
@@ -502,7 +516,8 @@ pcl::PointCloud<pcl::PointXYZI>::Ptr SimpleLoopClosureNode::constructPointCloudM
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud(new PointCloudType);
   map_cloud->reserve((size_t)((double)(first_cloud_size * optimization_result_size) * 1.5));
-  for (int i = 0; i < optimization_result_size; i += (interval + 1))
+  const std::size_t stride = static_cast<std::size_t>(interval) + 1U;
+  for (std::size_t i = 0; i < static_cast<std::size_t>(optimization_result_size); i += stride)
   {
     Eigen::Affine3d pose;
     {

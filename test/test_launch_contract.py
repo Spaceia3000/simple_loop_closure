@@ -76,14 +76,43 @@ def test_stream_audit_taps_ingress_before_sync_and_is_opt_in():
     assert 'emitStreamAudit("shutdown")' in source
 
 
-def test_pgo_depth_one_publish_calls_are_audited_before_publish():
+def test_pgo_publish_attempt_return_and_failure_boundaries_are_explicit():
     source = (Path(__file__).parents[1] / "src" / "simple_loop_closure_node.cpp").read_text()
     publisher = 'create_publisher<nav_msgs::msg::Odometry>("/pgo_odom", 1)'
-    audit_call = "audit.pgo_publish_calls.observe("
+    attempted = "audit.pgo_publish_attempted.observe("
+    completed = "audit.pgo_publish_completed.observe("
+    failed = "audit.pgo_publish_failed.observe("
     publish_call = "pub_pgo_odometry_->publish(pgo_odom_msg)"
 
     assert publisher in source
-    assert source.index(audit_call) < source.index(publish_call)
+    audited_path = source[source.index("const std::int64_t stamp_ns") :]
+    assert audited_path.index(attempted) < audited_path.index(publish_call)
+    assert audited_path.index(failed) > audited_path.index(publish_call)
+    assert audited_path.index(completed) > audited_path.index(publish_call)
+    assert "catch (...)" in audited_path
+    assert audited_path.index(failed) < audited_path.index("throw;")
+
+
+def test_audit_off_path_has_no_stamp_hashing_or_audit_locking():
+    source = (Path(__file__).parents[1] / "src" / "simple_loop_closure_node.cpp").read_text()
+    function = source[
+        source.index("void SimpleLoopClosureNode::publishPoseGraphOptimizedOdometry") :
+        source.index("void SimpleLoopClosureNode::pointCloudAndOdometryCallback")
+    ]
+    off_path = function[function.index("if (!stream_audit_context_)") : function.index("const std::int64_t stamp_ns")]
+
+    assert "pub_pgo_odometry_->publish(pgo_odom_msg);" in off_path
+    assert "return;" in off_path
+    assert ".observe(" not in off_path
+    assert "lock_guard" not in off_path
+
+
+def test_visualization_map_stride_cannot_wrap_in_signed_arithmetic():
+    source = (Path(__file__).parents[1] / "src" / "simple_loop_closure_node.cpp").read_text()
+
+    assert "const std::size_t stride = static_cast<std::size_t>(interval) + 1U;" in source
+    assert "i += stride" in source
+    assert "i += (interval + 1)" not in source
 
 
 def test_stream_audit_stage_taps_match_true_processing_boundaries():
