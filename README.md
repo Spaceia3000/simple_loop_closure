@@ -1,4 +1,8 @@
 # simple_loop_closure
+
+For the isolated, script-only ROS 2 transport audit, see
+[F1 independent transport diagnostic](docs/f1_transport_diagnostic.md).
+
 ## Overview
 This repository is a ROS 2 implementation of Loop Closure for LiDAR SLAM. Currently (as on 15 Oct 2024) it is tested on ROS2 Humble, Ubuntu 22.04 
 
