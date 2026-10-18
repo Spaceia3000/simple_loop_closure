@@ -60,6 +60,17 @@ are recorded under `backend_validation` in `run_status.json`. A launch-wrapper
 return code is retained as evidence but is never a substitute for these node
 audits.
 
+For the precise combined C1 gate, add `--certify-all`. It derives the complete
+frame count and ordered timestamp identity from the selected cloud and
+odometry topics in the original SQLite bag; no dataset count is hardcoded.
+Both source topics must be nonempty, unique, and exactly identical in timestamp
+order. The PGO witness and recorded PGO are then compared independently with
+that source sequence, in addition to the native shutdown audits. When rosbag2
+metadata contains verifiable per-topic message counts, each is checked against
+the corresponding SQLite inventory count. To add a separate operator-supplied
+count expectation, use `--expected-source-count N`; it is optional and `N`
+must be a positive integer.
+
 The default backend command is:
 
 ```text
