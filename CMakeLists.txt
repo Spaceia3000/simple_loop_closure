@@ -94,6 +94,7 @@ install(DIRECTORY config launch rviz
 )
 
 install(PROGRAMS
+  scripts/analyze_loop_geometry.py
   scripts/evaluate_loop_closures.py
   scripts/evaluate_graph_correction.py
   DESTINATION lib/${PROJECT_NAME}
@@ -118,6 +119,9 @@ if(BUILD_TESTING)
     ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
   )
   ament_add_pytest_test(test_evaluate_graph_correction test/test_evaluate_graph_correction.py
+    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
+  )
+  ament_add_pytest_test(test_analyze_loop_geometry test/test_analyze_loop_geometry.py
     ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
   )
 endif()
