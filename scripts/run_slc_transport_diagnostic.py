@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shlex
 import signal
@@ -34,10 +35,22 @@ DEFAULT_ODOM_TOPIC = "/aft_mapped_to_init"
 DEFAULT_PGO_TOPIC = "/pgo_odom"
 
 
+class PlaybackTimeoutError(DiagnosticError):
+    """The explicitly bounded rosbag playback interval expired."""
+
+    def __init__(self, timeout: float, elapsed: float):
+        self.timeout_seconds = timeout
+        self.elapsed_seconds = elapsed
+        super().__init__(
+            "rosbag playback exceeded configured "
+            f"--playback-timeout-sec {timeout:g} after {elapsed:.6f} monotonic seconds"
+        )
+
+
 def _positive(value: str) -> float:
     parsed = float(value)
-    if parsed <= 0.0:
-        raise argparse.ArgumentTypeError("must be greater than zero")
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise argparse.ArgumentTypeError("must be finite and greater than zero")
     return parsed
 
 
@@ -63,6 +76,11 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--endpoint-snapshot-delay-sec", type=_positive, default=0.5)
     run.add_argument("--drain-sec", type=_positive, default=2.0)
     run.add_argument("--shutdown-timeout-sec", type=_positive, default=10.0)
+    run.add_argument(
+        "--playback-timeout-sec",
+        type=_positive,
+        help="optional finite wall-clock timeout for rosbag playback",
+    )
     run.add_argument("--cloud-topic", default=DEFAULT_CLOUD_TOPIC)
     run.add_argument("--odom-topic", default=DEFAULT_ODOM_TOPIC)
     run.add_argument("--pgo-topic", default=DEFAULT_PGO_TOPIC)
@@ -109,6 +127,21 @@ def inspect_bag(bag: Path, topics: Sequence[str]) -> dict[str, list[dict[str, in
     return read_sqlite_messages(bag, topics, ros_header_decoder())
 
 
+def bag_content_duration_seconds(bag: Path) -> float | None:
+    """Return rosbag2's declared content duration when it can be read safely."""
+    try:
+        import yaml
+    except ImportError:
+        return None
+    try:
+        metadata = yaml.safe_load((bag / "metadata.yaml").read_text(encoding="utf-8"))
+        duration_ns = metadata["rosbag2_bagfile_information"]["duration"]["nanoseconds"]
+        duration = int(duration_ns) / 1_000_000_000
+    except (KeyError, TypeError, ValueError, OSError, yaml.YAMLError):
+        return None
+    return duration if math.isfinite(duration) and duration >= 0.0 else None
+
+
 def audit_artifacts(
     source_bag: Path,
     recorded_bag: Path,
@@ -117,6 +150,7 @@ def audit_artifacts(
     cloud_topic: str,
     odom_topic: str,
     pgo_topic: str,
+    run_evidence: dict[str, object] | None = None,
 ) -> dict[str, object]:
     source = inspect_bag(source_bag, (cloud_topic, odom_topic))
     recorded = inspect_bag(recorded_bag, (cloud_topic, odom_topic, pgo_topic))
@@ -128,6 +162,8 @@ def audit_artifacts(
         odom_topic,
         pgo_topic,
     )
+    if run_evidence is not None:
+        report["run_evidence"] = run_evidence
     write_json(report_path, report)
     return report
 
@@ -208,7 +244,34 @@ def stop_process(process: subprocess.Popen[bytes], timeout: float) -> None:
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait()
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                raise DiagnosticError(
+                    f"child process pid {process.pid} did not exit after SIGKILL "
+                    f"within {timeout:g} seconds"
+                ) from exc
+
+
+def wait_for_playback(
+    process: subprocess.Popen[bytes], timeout: float | None, started: float | None = None
+) -> tuple[int, float]:
+    """Wait for the exact playback child and measure monotonic wall time."""
+    if started is None:
+        started = time.monotonic()
+    try:
+        if timeout is None:
+            returncode = process.wait()
+        else:
+            remaining = timeout - (time.monotonic() - started)
+            if remaining <= 0.0:
+                raise subprocess.TimeoutExpired(process.args, timeout)
+            returncode = process.wait(timeout=remaining)
+    except subprocess.TimeoutExpired as exc:
+        elapsed = time.monotonic() - started
+        assert timeout is not None
+        raise PlaybackTimeoutError(timeout, elapsed) from exc
+    return returncode, time.monotonic() - started
 
 
 def start_logged(command: Sequence[str], log: Path, env: dict[str, str]):
@@ -237,6 +300,7 @@ def run_diagnostic(args: argparse.Namespace) -> int:
 
     topics = (args.cloud_topic, args.odom_topic, args.pgo_topic)
     source_inventory = inspect_bag(source_bag, topics[:2])
+    bag_duration = bag_content_duration_seconds(source_bag)
     output_dir.mkdir(parents=True, exist_ok=False)
     write_json(output_dir / "source_sqlite_stamps.json", source_inventory)
 
@@ -274,6 +338,7 @@ def run_diagnostic(args: argparse.Namespace) -> int:
     manifest = {
         "ros_domain_id": args.domain_id,
         "source_bag": str(source_bag),
+        "bag_content_duration_seconds": bag_duration,
         "output_dir": str(output_dir),
         "topics": {"cloud": args.cloud_topic, "odometry": args.odom_topic, "pgo_odometry": args.pgo_topic},
         "subscriber_qos_profile": args.subscriber_qos_profile,
@@ -282,12 +347,18 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             "reliable": "keep_last(100), reliable, volatile",
         },
         "publisher_qos": "rosbag2 default" if qos_yaml is None else {"yaml": str(qos_yaml)},
+        "result_policy": {
+            "fail_closed": True,
+            "aborted_replay_pass_eligible": False,
+            "partial_audit_requires_readable_artifacts": True,
+        },
         "timings_seconds": {
             "playback_rate": 1.0,
             "startup": args.startup_sec,
             "endpoint_snapshot_delay": args.endpoint_snapshot_delay_sec,
             "drain": args.drain_sec,
             "shutdown_timeout": args.shutdown_timeout_sec,
+            "playback_timeout": args.playback_timeout_sec,
         },
         "commands": {"witness": witness, "backend": backend, "recorder": recorder, "playback": playback},
         "constraints": [
@@ -300,7 +371,21 @@ def run_diagnostic(args: argparse.Namespace) -> int:
     write_json(output_dir / "udp_before.json", udp_before)
 
     processes: list[tuple[str, subprocess.Popen[bytes], object]] = []
-    status: dict[str, object] = {"completed": False}
+    status: dict[str, object] = {
+        "completed": False,
+        "outcome": "running",
+        "playback": {
+            "completed": False,
+            "timed_out": False,
+            "timeout_seconds": args.playback_timeout_sec,
+            "bag_content_duration_seconds": bag_duration,
+            "elapsed_monotonic_seconds": None,
+            "effective_throughput_rate": None,
+        },
+    }
+    primary_error: BaseException | None = None
+    primary_traceback = None
+    cleanup_errors: list[str] = []
     try:
         for name, command in (("witness", witness), ("recorder", recorder), ("backend", backend)):
             process, stream = start_logged(command, output_dir / f"{name}.log", env)
@@ -311,33 +396,93 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             raise DiagnosticError(f"process exited during startup: {failed}")
 
         snapshot_endpoints(topics, output_dir / "endpoints_before_playback.json", env)
+        playback_started = time.monotonic()
         play_process, play_stream = start_logged(playback, output_dir / "playback.log", env)
         processes.append(("playback", play_process, play_stream))
         time.sleep(args.endpoint_snapshot_delay_sec)
         snapshot_endpoints(topics, output_dir / "endpoints_during_playback.json", env)
-        playback_returncode = play_process.wait()
+        playback_returncode, playback_elapsed = wait_for_playback(
+            play_process, args.playback_timeout_sec, playback_started
+        )
+        status["playback"]["elapsed_monotonic_seconds"] = playback_elapsed
         if playback_returncode != 0:
             raise DiagnosticError(f"rosbag playback failed with status {playback_returncode}")
+        status["playback"]["completed"] = True
+        if bag_duration is not None and playback_elapsed > 0.0:
+            status["playback"]["effective_throughput_rate"] = bag_duration / playback_elapsed
         time.sleep(args.drain_sec)
-        status["completed"] = True
-    except Exception as exc:
+    except BaseException as exc:
+        if isinstance(exc, PlaybackTimeoutError):
+            status["playback"]["timed_out"] = True
+            status["playback"]["elapsed_monotonic_seconds"] = exc.elapsed_seconds
         status["error"] = f"{type(exc).__name__}: {exc}"
-        raise
+        primary_error = exc
+        primary_traceback = exc.__traceback__
     finally:
-        for _name, process, _stream in reversed(processes):
-            stop_process(process, args.shutdown_timeout_sec)
+        for name, process, _stream in reversed(processes):
+            try:
+                stop_process(process, args.shutdown_timeout_sec)
+            except Exception as exc:
+                cleanup_errors.append(f"{name}: {type(exc).__name__}: {exc}")
         for name, process, stream in processes:
-            stream.close()
+            try:
+                stream.close()
+            except Exception as exc:
+                cleanup_errors.append(f"{name} log: {type(exc).__name__}: {exc}")
             status.setdefault("returncodes", {})[name] = process.returncode
+        if cleanup_errors:
+            status["cleanup_errors"] = cleanup_errors
+
+    try:
         udp_after = read_udp_counters()
         write_json(output_dir / "udp_after.json", udp_after)
         write_json(output_dir / "udp_delta.json", udp_counter_delta(udp_before, udp_after))
-        write_json(output_dir / "run_status.json", status)
+    except Exception as exc:
+        evidence_error = f"{type(exc).__name__}: {exc}"
+        status["evidence_error"] = evidence_error
+        if primary_error is None:
+            primary_error = DiagnosticError(f"failed to preserve UDP evidence: {evidence_error}")
+            primary_traceback = primary_error.__traceback__
 
-    audit_artifacts(
-        source_bag, recorded_bag, witness_path, output_dir / "loss_report.json",
-        args.cloud_topic, args.odom_topic, args.pgo_topic,
+    run_complete_for_audit = (
+        primary_error is None
+        and not cleanup_errors
+        and bool(status["playback"]["completed"])
     )
+    run_evidence = {
+        "audit_scope": "complete" if run_complete_for_audit else "partial",
+        "replay_completed": bool(status["playback"]["completed"]),
+        "pass_eligible": run_complete_for_audit,
+    }
+    try:
+        report = audit_artifacts(
+            source_bag, recorded_bag, witness_path, output_dir / "loss_report.json",
+            args.cloud_topic, args.odom_topic, args.pgo_topic,
+            run_evidence=run_evidence,
+        )
+        status["audit"] = {
+            "completed": True,
+            "scope": run_evidence["audit_scope"],
+            "pass_eligible": run_evidence["pass_eligible"],
+        }
+    except Exception as exc:
+        audit_error = f"{type(exc).__name__}: {exc}"
+        status["audit"] = {"completed": False, "error": audit_error}
+        if primary_error is None and not cleanup_errors:
+            primary_error = DiagnosticError(f"artifact audit failed: {audit_error}")
+            primary_traceback = primary_error.__traceback__
+
+    if primary_error is None and cleanup_errors:
+        primary_error = DiagnosticError(
+            "managed child cleanup failed: " + "; ".join(cleanup_errors)
+        )
+        primary_traceback = primary_error.__traceback__
+
+    status["completed"] = primary_error is None
+    status["outcome"] = "completed" if status["completed"] else "failed"
+    write_json(output_dir / "run_status.json", status)
+    if primary_error is not None:
+        raise primary_error.with_traceback(primary_traceback)
     return 0
 
 

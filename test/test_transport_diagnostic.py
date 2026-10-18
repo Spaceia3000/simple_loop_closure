@@ -1,7 +1,11 @@
 import json
+import signal
 import sqlite3
+import subprocess
 import sys
+from io import BytesIO
 from pathlib import Path
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -57,6 +61,18 @@ def test_reads_tiny_sqlite_bag_without_ros(tmp_path):
         CLOUD: [{"storage_ns": 1001, "header_ns": 11}, {"storage_ns": 2001, "header_ns": 22}],
         ODOM: [{"storage_ns": 1002, "header_ns": 11}, {"storage_ns": 2002, "header_ns": 22}],
     }
+
+
+def test_reads_standard_rosbag_metadata_duration(tmp_path):
+    bag = tmp_path / "bag"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text(
+        "rosbag2_bagfile_information:\n"
+        "  duration:\n"
+        "    nanoseconds: 265900000000\n",
+        encoding="utf-8",
+    )
+    assert runner.bag_content_duration_seconds(bag) == pytest.approx(265.9)
 
 
 def test_stamp_comparison_preserves_duplicates():
@@ -150,3 +166,173 @@ def test_run_refuses_existing_output_before_touching_bag(tmp_path):
     )
     with pytest.raises(diagnostic.DiagnosticError, match="refusing to overwrite"):
         runner.run_diagnostic(args)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+def test_playback_timeout_requires_finite_positive_value(value):
+    with pytest.raises(SystemExit):
+        runner.parser().parse_args(
+            [
+                "run", "--bag", "bag", "--output-dir", "out", "--domain-id", "166",
+                "--subscriber-qos-profile", "reliable", "--playback-timeout-sec", value,
+            ]
+        )
+
+
+def test_playback_timeout_is_opt_in():
+    args = runner.parser().parse_args(
+        [
+            "run", "--bag", "bag", "--output-dir", "out", "--domain-id", "166",
+            "--subscriber-qos-profile", "reliable",
+        ]
+    )
+    assert args.playback_timeout_sec is None
+
+
+def test_wait_for_playback_uses_remaining_timeout_and_records_elapsed(monkeypatch):
+    process = Mock()
+    process.wait.return_value = 0
+    monkeypatch.setattr(runner.time, "monotonic", Mock(side_effect=[11.0, 13.5]))
+
+    returncode, elapsed = runner.wait_for_playback(process, 5.0, started=10.0)
+
+    assert returncode == 0
+    assert elapsed == pytest.approx(3.5)
+    process.wait.assert_called_once_with(timeout=4.0)
+
+
+def test_wait_for_playback_timeout_is_precise(monkeypatch):
+    process = Mock(args=["ros2", "bag", "play"])
+    process.wait.side_effect = subprocess.TimeoutExpired(process.args, 4.0)
+    monkeypatch.setattr(runner.time, "monotonic", Mock(side_effect=[11.0, 15.25]))
+
+    with pytest.raises(
+        runner.PlaybackTimeoutError,
+        match=r"--playback-timeout-sec 5 after 5\.250000 monotonic seconds",
+    ):
+        runner.wait_for_playback(process, 5.0, started=10.0)
+    process.wait.assert_called_once_with(timeout=4.0)
+
+
+def test_stop_process_escalates_only_the_given_child_with_bounded_waits():
+    process = Mock(pid=1234)
+    process.poll.return_value = None
+    process.wait.side_effect = [
+        subprocess.TimeoutExpired("child", 2.0),
+        subprocess.TimeoutExpired("child", 2.0),
+        -9,
+    ]
+
+    runner.stop_process(process, 2.0)
+
+    process.send_signal.assert_called_once_with(signal.SIGINT)
+    process.terminate.assert_called_once_with()
+    process.kill.assert_called_once_with()
+    assert process.wait.call_args_list == [call(timeout=2.0)] * 3
+
+
+def test_stop_process_reports_failure_after_bounded_sigkill_wait():
+    process = Mock(pid=4321)
+    process.poll.return_value = None
+    process.wait.side_effect = subprocess.TimeoutExpired("child", 1.5)
+
+    with pytest.raises(
+        diagnostic.DiagnosticError,
+        match="pid 4321 did not exit after SIGKILL within 1.5 seconds",
+    ):
+        runner.stop_process(process, 1.5)
+    assert process.wait.call_count == 3
+
+
+def test_timeout_run_is_failed_closed_and_salvages_partial_audit(tmp_path, monkeypatch):
+    class FakeProcess:
+        next_pid = 100
+
+        def __init__(self, timeout_on_first_wait=False):
+            self.args = ["mock"]
+            self.pid = FakeProcess.next_pid
+            FakeProcess.next_pid += 1
+            self.returncode = None
+            self.timeout_on_first_wait = timeout_on_first_wait
+            self.wait_count = 0
+            self.signals = []
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.wait_count += 1
+            if self.timeout_on_first_wait and self.wait_count == 1:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            self.returncode = 0
+            return 0
+
+        def send_signal(self, sent_signal):
+            self.signals.append(sent_signal)
+
+        def terminate(self):
+            self.signals.append(signal.SIGTERM)
+
+        def kill(self):
+            self.signals.append(signal.SIGKILL)
+
+    source = {CLOUD: [{"header_ns": 1}], ODOM: [{"header_ns": 1}]}
+    processes = []
+
+    def fake_start(command, _log, _env):
+        is_playback = command[:3] == ["ros2", "bag", "play"]
+        process = FakeProcess(timeout_on_first_wait=is_playback)
+        processes.append(process)
+        return process, BytesIO()
+
+    def fake_audit(*audit_args, run_evidence):
+        report = {"counts": "partial", "run_evidence": run_evidence}
+        runner.write_json(audit_args[3], report)
+        return report
+
+    monkeypatch.setattr(runner, "inspect_bag", lambda *_args: source)
+    monkeypatch.setattr(runner, "bag_content_duration_seconds", lambda _bag: 4.0)
+    monkeypatch.setattr(runner, "read_udp_counters", lambda: {})
+    monkeypatch.setattr(runner, "snapshot_endpoints", lambda *_args: None)
+    monkeypatch.setattr(runner, "start_logged", fake_start)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner.time, "monotonic", Mock(side_effect=[10.0, 10.0, 15.0]))
+    monkeypatch.setattr(runner, "audit_artifacts", fake_audit)
+
+    output = tmp_path / "out"
+    args = runner.parser().parse_args(
+        [
+            "run", "--bag", str(tmp_path / "source"), "--output-dir", str(output),
+            "--domain-id", "166", "--subscriber-qos-profile", "reliable",
+            "--playback-timeout-sec", "5", "--startup-sec", "0.01",
+            "--endpoint-snapshot-delay-sec", "0.01", "--drain-sec", "0.01",
+            "--shutdown-timeout-sec", "0.01",
+        ]
+    )
+
+    with pytest.raises(runner.PlaybackTimeoutError):
+        runner.run_diagnostic(args)
+
+    status = json.loads((output / "run_status.json").read_text(encoding="utf-8"))
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads((output / "loss_report.json").read_text(encoding="utf-8"))
+    assert status["completed"] is False
+    assert status["outcome"] == "failed"
+    assert status["playback"] == {
+        "bag_content_duration_seconds": 4.0,
+        "completed": False,
+        "effective_throughput_rate": None,
+        "elapsed_monotonic_seconds": 5.0,
+        "timed_out": True,
+        "timeout_seconds": 5.0,
+    }
+    assert status["audit"] == {
+        "completed": True, "pass_eligible": False, "scope": "partial"
+    }
+    assert manifest["timings_seconds"]["playback_timeout"] == 5.0
+    assert manifest["result_policy"]["aborted_replay_pass_eligible"] is False
+    assert report["run_evidence"] == {
+        "audit_scope": "partial", "pass_eligible": False, "replay_completed": False
+    }
+    assert len(processes) == 4
+    assert all(process.signals == [signal.SIGINT] for process in processes)

@@ -35,8 +35,13 @@ python3 scripts/run_slc_transport_diagnostic.py run \
   --startup-sec 3.0 \
   --endpoint-snapshot-delay-sec 0.5 \
   --drain-sec 2.0 \
-  --shutdown-timeout-sec 10.0
+  --shutdown-timeout-sec 10.0 \
+  --playback-timeout-sec 360.0
 ```
+
+`--playback-timeout-sec` is optional and has no implicit default. Supply a
+finite positive value to bound playback wall time explicitly; omitting it
+retains an unbounded playback wait for compatibility with prior experiments.
 
 The default backend command is:
 
@@ -75,7 +80,9 @@ The exclusive output directory contains:
 - `loss_report.json`: labeled comparisons plus explicit header/storage/receive rates
 - `endpoints_*.json`: verbose ROS endpoint snapshots before and during playback
 - `udp_before.json`, `udp_after.json`, and `udp_delta.json`: read-only host UDP MIB evidence
-- one log per managed process and `run_status.json`
+- one log per managed process and fail-closed `run_status.json`, including
+  monotonic playback elapsed time, metadata duration when readable, and a
+  completion-only effective throughput ratio
 
 An audit can be rebuilt without replay:
 
@@ -102,6 +109,11 @@ to a ROS node or DDS participant. Very short bags can finish before the second
 endpoint snapshot completes; the exact snapshot delay remains in the manifest.
 Only rosbag2 SQLite (`.db3`) storage and messages with a ROS `header.stamp` are
 supported. No MCAP fallback is silently selected.
+
+On an aborted run, the wrapper first performs bounded cleanup of its exact
+children and then attempts a partial audit. It writes `loss_report.json` only
+when the SQLite and witness artifacts are readable, and marks that report
+`pass_eligible=false`; an aborted replay is never a passing diagnostic.
 
 ## Small tests
 
