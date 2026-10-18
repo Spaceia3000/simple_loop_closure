@@ -32,6 +32,11 @@ simple_loop_closure:
     target_frame_num: 50
     target_voxel_leaf_size: 0.4
     source_voxel_leaf_size: 0.4
-    vis_map_voxel_leaf_size: 0.8
+    # Presentation-only map density. More points and frames increase CPU/RAM.
+    vis_map_voxel_leaf_size: 0.4
     fitness_score_th: 0.3
-    vis_map_cloud_frame_interval: 3
+    vis_map_cloud_frame_interval: 1
+    visualization:
+      optimized_edge_width_m: 0.03
+      original_edge_width_m: 0.03
+      loop_edge_width_m: 0.008

@@ -203,6 +203,30 @@ TEST(MathSafetyParameters, AcceptsZeroAndFiniteNonnegativeBoundaries)
       std::numeric_limits<double>::max(), std::numeric_limits<int>::max()));
 }
 
+TEST(VisualizationLineWidth, EnforcesFiniteInclusiveBounds)
+{
+  EXPECT_DOUBLE_EQ(
+      simple_loop_closure::validateVisualizationLineWidth("width", 0.002), 0.002);
+  EXPECT_DOUBLE_EQ(
+      simple_loop_closure::validateVisualizationLineWidth("width", 0.10), 0.10);
+  EXPECT_DOUBLE_EQ(
+      simple_loop_closure::validateVisualizationLineWidth("width", 0.20), 0.20);
+  EXPECT_THROW(
+      simple_loop_closure::validateVisualizationLineWidth("width", 0.0019),
+      std::invalid_argument);
+  EXPECT_THROW(
+      simple_loop_closure::validateVisualizationLineWidth("width", 0.2001),
+      std::invalid_argument);
+  EXPECT_THROW(
+      simple_loop_closure::validateVisualizationLineWidth(
+          "width", std::numeric_limits<double>::quiet_NaN()),
+      std::invalid_argument);
+  EXPECT_THROW(
+      simple_loop_closure::validateVisualizationLineWidth(
+          "width", std::numeric_limits<double>::infinity()),
+      std::invalid_argument);
+}
+
 TEST(SyncQueueSize, EnforcesOperationalMemorySafetyBoundaries)
 {
   EXPECT_THROW(simple_loop_closure::validateSyncQueueSize(0), std::invalid_argument);

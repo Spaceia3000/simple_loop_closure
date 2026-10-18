@@ -20,6 +20,18 @@ inline void requireNonnegative(const char* name, const int value)
     throw std::invalid_argument(std::string(name) + " must be nonnegative");
 }
 
+inline constexpr double kMinVisualizationLineWidthM = 0.002;
+inline constexpr double kMaxVisualizationLineWidthM = 0.20;
+
+inline double validateVisualizationLineWidth(const char* name, const double value)
+{
+  if (!std::isfinite(value) || value < kMinVisualizationLineWidthM ||
+      value > kMaxVisualizationLineWidthM)
+    throw std::invalid_argument(
+        std::string(name) + " must be finite and in [0.002, 0.20] metres");
+  return value;
+}
+
 // Operational memory-safety guard, not an empirically optimal matching depth.
 inline constexpr std::uint32_t kMaxSyncQueueSize = 1024U;
 

@@ -31,3 +31,8 @@ simple_loop_closure:
     vis_map_voxel_leaf_size: 0.8
     fitness_score_th: 0.3
     vis_map_cloud_frame_interval: 3
+    # Marker-only widths; preserve the historical 0.10 m default appearance.
+    visualization:
+      optimized_edge_width_m: 0.10
+      original_edge_width_m: 0.10
+      loop_edge_width_m: 0.10

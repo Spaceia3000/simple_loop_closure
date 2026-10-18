@@ -112,7 +112,9 @@ private:
     std_msgs::msg::ColorRGBA odom_edge_color_;
     std_msgs::msg::ColorRGBA loop_edge_color_;
     std_msgs::msg::ColorRGBA node_color_;
-    double edge_scale_;
+    double optimized_edge_width_m_;
+    double original_edge_width_m_;
+    double loop_edge_width_m_;
     double node_scale_;
 
     std::mutex mtx_buf_;

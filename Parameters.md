@@ -60,3 +60,13 @@ If the Fitness Score of the ICP is below this value, the loop edge is registered
 - vis_map_cloud_frame_interval  
 Skip nodes at this interval when creating a point cloud map to publish.
 It affects only the point cloud to be Publish.
+- visualization.optimized_edge_width_m
+Marker-only width in metres for the magenta optimized-keyframe `LINE_LIST`.
+- visualization.original_edge_width_m
+Marker-only width in metres for the cyan original-keyframe `LINE_STRIP`.
+- visualization.loop_edge_width_m
+Marker-only width in metres for the red accepted-loop `LINE_LIST`.
+
+All three visualization widths must be finite and in the inclusive range
+`[0.002, 0.20]`. Their default is `0.10`, preserving the original appearance;
+they do not change graph optimization or loop acceptance.

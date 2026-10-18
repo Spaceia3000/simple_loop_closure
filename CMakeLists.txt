@@ -147,6 +147,10 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_analyze_loop_geometry test/test_analyze_loop_geometry.py
     ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
   )
+  ament_add_pytest_test(test_rviz_visibility_fix_contract
+    test/test_rviz_visibility_fix_contract.py
+    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
+  )
 endif()
 
 ament_package()

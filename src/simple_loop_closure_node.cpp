@@ -104,6 +104,9 @@ void SimpleLoopClosureNode::initialize()
   this->declare_parameter<double>("vis_map_voxel_leaf_size", 0.8);
   this->declare_parameter<double>("fitness_score_th", 0.3);
   this->declare_parameter<int>("vis_map_cloud_frame_interval", 3);
+  this->declare_parameter<double>("visualization.optimized_edge_width_m", 0.10);
+  this->declare_parameter<double>("visualization.original_edge_width_m", 0.10);
+  this->declare_parameter<double>("visualization.loop_edge_width_m", 0.10);
   this->declare_parameter<std::string>("expected_fixed_frame", "camera_init");
   this->declare_parameter<std::string>("expected_body_frame", "aft_mapped");
   this->declare_parameter<bool>("require_exact_timestamps", true);
@@ -128,6 +131,9 @@ void SimpleLoopClosureNode::initialize()
   this->get_parameter("vis_map_voxel_leaf_size", vis_map_voxel_leaf_size_);
   this->get_parameter("fitness_score_th", fitness_score_th_);
   this->get_parameter("vis_map_cloud_frame_interval", vis_map_cloud_frame_interval_);
+  this->get_parameter("visualization.optimized_edge_width_m", optimized_edge_width_m_);
+  this->get_parameter("visualization.original_edge_width_m", original_edge_width_m_);
+  this->get_parameter("visualization.loop_edge_width_m", loop_edge_width_m_);
   this->get_parameter("expected_fixed_frame", input_contract_.fixed_frame);
   this->get_parameter("expected_body_frame", input_contract_.body_frame);
   this->get_parameter("require_exact_timestamps", input_contract_.require_exact_stamp);
@@ -144,6 +150,12 @@ void SimpleLoopClosureNode::initialize()
   simple_loop_closure::validateMathSafetyParameters(
       keyframe_dist_th_, keyframe_angular_dist_th_, time_stamp_tolerance_,
       vis_map_cloud_frame_interval_);
+  optimized_edge_width_m_ = simple_loop_closure::validateVisualizationLineWidth(
+      "visualization.optimized_edge_width_m", optimized_edge_width_m_);
+  original_edge_width_m_ = simple_loop_closure::validateVisualizationLineWidth(
+      "visualization.original_edge_width_m", original_edge_width_m_);
+  loop_edge_width_m_ = simple_loop_closure::validateVisualizationLineWidth(
+      "visualization.loop_edge_width_m", loop_edge_width_m_);
   const std::uint32_t validated_sync_queue_size =
       simple_loop_closure::validateSyncQueueSize(sync_queue_size_);
   const std::uint32_t validated_cloud_input_depth =
@@ -329,7 +341,6 @@ void SimpleLoopClosureNode::initialize()
   node_color_.b = 0.0;
   node_color_.a = 1.0;
 
-  edge_scale_ = 0.1;
   node_scale_ = 0.15;
 
   saving_ = false;
@@ -729,7 +740,7 @@ void SimpleLoopClosureNode::constructVisualizationOdometryEdges(const int& res_s
   marker_msg.pose.orientation.w = 1.0;
   marker_msg.id = 0;
   marker_msg.type = visualization_msgs::msg::Marker::LINE_LIST;
-  marker_msg.scale.x = edge_scale_;
+  marker_msg.scale.x = optimized_edge_width_m_;
   marker_msg.color = odom_edge_color_;
 
   marker_msg.points.clear();
@@ -762,7 +773,7 @@ void SimpleLoopClosureNode::constructVisualizationOriginalEdges(
   marker_msg.pose.orientation.w = 1.0;
   marker_msg.id = 0;
   marker_msg.type = visualization_msgs::msg::Marker::LINE_STRIP;
-  marker_msg.scale.x = edge_scale_;
+  marker_msg.scale.x = original_edge_width_m_;
   marker_msg.color.r = 0.0;
   marker_msg.color.g = 1.0;
   marker_msg.color.b = 1.0;
@@ -797,7 +808,7 @@ void SimpleLoopClosureNode::constructVisualizationLoopEdges(const int& res_size,
   marker_msg.pose.orientation.w = 1.0;
   marker_msg.id = 0;
   marker_msg.type = visualization_msgs::msg::Marker::LINE_LIST;
-  marker_msg.scale.x = edge_scale_;
+  marker_msg.scale.x = loop_edge_width_m_;
   marker_msg.color = loop_edge_color_;
 
   marker_msg.points.clear();
