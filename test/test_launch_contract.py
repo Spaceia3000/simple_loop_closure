@@ -71,3 +71,16 @@ def test_generated_python_and_native_build_artifacts_are_ignored():
     assert ".codex_native/" in ignore_rules
     assert "__pycache__/" in ignore_rules
     assert "*.py[cod]" in ignore_rules
+
+
+def test_ab_rviz_uses_only_native_graph_and_output_topics():
+    config = (Path(__file__).parents[1] / "rviz" / "simple_loop_closure_ab.rviz").read_text()
+
+    assert "Fixed Frame: camera_init" in config
+    assert "/simple_loop_closure/original_keyframes" in config
+    assert "/simple_loop_closure/optimized_keyframes" in config
+    assert "/simple_loop_closure/loop_edges" in config
+    assert "/aft_mapped_to_init" in config
+    assert "/pgo_odom" in config
+    assert "/pgo_map_cloud" in config
+    assert "evaluation" not in config

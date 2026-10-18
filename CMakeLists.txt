@@ -89,11 +89,13 @@ install(TARGETS
 #   DESTINATION lib/${PROJECT_NAME}
 # )
 
-install(DIRECTORY config launch 
+install(DIRECTORY config launch rviz
   DESTINATION share/${PROJECT_NAME} 
 )
 
-install(PROGRAMS scripts/evaluate_loop_closures.py
+install(PROGRAMS
+  scripts/evaluate_loop_closures.py
+  scripts/evaluate_graph_correction.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -113,6 +115,9 @@ if(BUILD_TESTING)
       "ROS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/ros_test_logs"
   )
   ament_add_pytest_test(test_evaluate_loop_closures test/test_evaluate_loop_closures.py
+    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
+  )
+  ament_add_pytest_test(test_evaluate_graph_correction test/test_evaluate_graph_correction.py
     ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
   )
 endif()

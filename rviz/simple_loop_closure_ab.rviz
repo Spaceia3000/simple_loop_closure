@@ -1,0 +1,79 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 32; 32; 32
+    Fixed Frame: camera_init
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Value: true
+      Cell Size: 1
+      Plane: XY
+    - Class: rviz_default_plugins/Marker
+      Name: A original keyframes (cyan)
+      Enabled: true
+      Value: true
+      Marker Topic:
+        Value: /simple_loop_closure/original_keyframes
+    - Class: rviz_default_plugins/Marker
+      Name: B optimized keyframes (magenta)
+      Enabled: true
+      Value: true
+      Marker Topic:
+        Value: /simple_loop_closure/optimized_keyframes
+    - Class: rviz_default_plugins/Marker
+      Name: Accepted loop edges (red)
+      Enabled: true
+      Value: true
+      Marker Topic:
+        Value: /simple_loop_closure/loop_edges
+    - Class: rviz_default_plugins/Odometry
+      Name: A FAST odometry
+      Enabled: true
+      Value: true
+      Topic:
+        Value: /aft_mapped_to_init
+      Shape:
+        Color: 0; 255; 255
+        Value: Arrow
+      Keep: 1000
+    - Class: rviz_default_plugins/Odometry
+      Name: B PGO odometry
+      Enabled: true
+      Value: true
+      Topic:
+        Value: /pgo_odom
+      Shape:
+        Color: 255; 0; 255
+        Value: Arrow
+      Keep: 1000
+    - Class: rviz_default_plugins/PointCloud2
+      Name: PGO map cloud
+      Enabled: true
+      Value: true
+      Topic:
+        Value: /pgo_map_cloud
+      Style: Points
+      Size (Pixels): 2
+    - Class: rviz_default_plugins/TF
+      Name: Input TF (backend publishes no corrected TF)
+      Enabled: true
+      Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 40
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+Window Geometry:
+  Width: 1400
+  Height: 900
