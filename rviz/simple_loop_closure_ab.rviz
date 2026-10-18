@@ -1,122 +1,347 @@
 Panels:
   - Class: rviz_common/Displays
+    Help Height: 0
     Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /GLOBAL corrected trajectory (yellow, sparse PGO keyframes)1
+        - /LOCAL FAST RGB cumulative preview (not loop-corrected)1
+      Splitter Ratio: 0.5
+    Tree Height: 640
   - Class: rviz_common/Views
+    Expanded: [/Current View1]
     Name: Views
+    Splitter Ratio: 0.5
 Visualization Manager:
   Class: ""
-  Global Options:
-    Background Color: 32; 32; 32
-    Fixed Frame: camera_init
-    Frame Rate: 30
   Displays:
-    - Class: rviz_default_plugins/Grid
-      Name: Grid
-      Enabled: true
-      Value: true
+    - Alpha: 0.5
       Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: false
+      Line Style: {Line Width: 0.03, Value: Lines}
+      Name: UGV10 reference grid (approx. x[-12,41], y[-82,1])
+      Normal Cell Count: 0
+      Offset: {X: 0, Y: 0, Z: 0}
       Plane: XY
-    - Class: rviz_default_plugins/Marker
-      Name: A original keyframes (cyan)
+      Plane Cell Count: 100
+      Reference Frame: <Fixed Frame>
+      Value: false
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 255; 255; 0
       Enabled: true
-      Value: true
+      Head Diameter: 0.3
+      Head Length: 0.2
+      Length: 0.3
+      Line Style: Billboards
+      Line Width: 0.08
+      Name: GLOBAL corrected trajectory (yellow, sparse PGO keyframes)
+      Offset: {X: 0, Y: 0, Z: 0}
+      Pose Color: 255; 255; 0
+      Pose Style: None
+      Radius: 0.03
+      Shaft Diameter: 0.1
+      Shaft Length: 0.1
       Topic:
-        Depth: 10
+        Depth: 1
         Durability Policy: Volatile
+        Filter size: 1
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /simple_loop_closure/original_keyframes
-    - Class: rviz_default_plugins/Marker
-      Name: B optimized keyframes (magenta)
-      Enabled: true
+        Value: /simple_loop_closure/global_path
       Value: true
-      Topic:
-        Depth: 10
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /simple_loop_closure/optimized_keyframes
-    - Class: rviz_default_plugins/Marker
-      Name: Accepted loop edges (red)
-      Enabled: true
-      Value: true
-      Topic:
-        Depth: 10
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /simple_loop_closure/loop_edges
     - Class: rviz_default_plugins/Odometry
-      Name: A FAST odometry
       Enabled: true
-      Value: true
-      Topic:
-        Value: /aft_mapped_to_init
-      Shape:
-        Color: 0; 255; 255
-        Value: Arrow
       Keep: 1000
-    - Class: rviz_default_plugins/Odometry
-      Name: B PGO odometry
-      Enabled: true
-      Value: true
-      Topic:
-        Value: /pgo_odom
+      Name: GLOBAL corrected odometry (magenta)
+      Position Tolerance: 0.01
+      Angle Tolerance: 0.01
       Shape:
+        Alpha: 1
+        Axes Length: 0.5
+        Axes Radius: 0.05
         Color: 255; 0; 255
+        Head Length: 0.1
+        Head Radius: 0.05
+        Shaft Length: 0.5
+        Shaft Radius: 0.02
         Value: Arrow
-      Keep: 1000
-    - Class: rviz_default_plugins/PointCloud2
-      Name: PGO optimized accumulated map (light grey)
-      Enabled: true
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /pgo_odom
       Value: true
-      Alpha: 0.9
-      Color: 208; 222; 235
+    - Alpha: 0.9
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 190; 190; 190
       Color Transformer: FlatColor
-      Position Transformer: XYZ
       Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: GLOBAL PGO map (grey XYZI, no RGB)
+      Position Transformer: XYZ
       Selectable: true
+      Size (Pixels): 3
+      Size (m): 0.01
+      Style: Flat Squares
       Topic:
         Depth: 5
         Durability Policy: Volatile
+        Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /pgo_map_cloud
-      Style: Flat Squares
-      Size (Pixels): 3
-    - Class: rviz_default_plugins/PointCloud2
-      Name: FAST current LiDAR scan (amber)
-      Enabled: true
+      Use Fixed Frame: true
+      Use rainbow: false
       Value: true
-      Alpha: 0.75
-      Color: 255; 188; 85
-      Color Transformer: FlatColor
-      Position Transformer: XYZ
-      Decay Time: 0
-      Selectable: false
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: GLOBAL accepted loop edges (red)
       Topic:
-        Depth: 3
+        Depth: 10
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /simple_loop_closure/loop_edges
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: GLOBAL optimized sparse graph marker (magenta)
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /simple_loop_closure/optimized_keyframes
+      Value: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: false
+      Name: LOCAL original keyframes marker (optional cyan)
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /simple_loop_closure/original_keyframes
+      Value: false
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 25; 255; 255
+      Enabled: true
+      Head Diameter: 0.3
+      Head Length: 0.2
+      Length: 0.3
+      Line Style: Billboards
+      Line Width: 0.03
+      Name: LOCAL FAST path (cyan, uncorrected geometry)
+      Offset: {X: 0, Y: 0, Z: 0}
+      Pose Color: 25; 255; 255
+      Pose Style: None
+      Radius: 0.03
+      Shaft Diameter: 0.1
+      Shaft Length: 0.1
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        Filter size: 1
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /path
+      Value: true
+    - Alpha: 0.8
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: RGB8
+      Decay Time: 10000
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: LOCAL FAST RGB cumulative preview (not loop-corrected)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 2
+      Size (m): 0.005
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cloud_registered
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+    - Class: rviz_default_plugins/Odometry
+      Enabled: false
+      Keep: 1000
+      Name: LOCAL FAST raw odometry (optional; path shown above)
+      Shape:
+        Color: 25; 255; 255
+        Value: Arrow
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /aft_mapped_to_init
+      Value: false
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: RGB8
+      Decay Time: 0
+      Enabled: false
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: LOCAL FAST newest RGB scan (optional, not loop-corrected)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 2
+      Size (m): 0.005
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cloud_registered
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: false
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: LOCAL FAST camera RGB image
+      Normalize Range: true
+      Topic:
+        Depth: 1
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /cloud_registered_metric
-      Style: Flat Squares
-      Size (Pixels): 3
-    - Class: rviz_default_plugins/TF
-      Name: Input TF (backend publishes no corrected TF)
-      Enabled: true
+        Value: /rgb_img
       Value: true
+    - Alpha: 1
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 188; 85
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Enabled: false
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: DIAGNOSTIC raw metric cloud (disabled)
+      Position Transformer: XYZ
+      Selectable: false
+      Size (Pixels): 2
+      Size (m): 0.01
+      Style: Points
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        Filter size: 1
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /cloud_registered_metric
+      Use Fixed Frame: true
+      Use rainbow: false
+      Value: false
+    - Class: rviz_default_plugins/TF
+      Enabled: false
+      Frame Timeout: 15
+      Marker Scale: 0.5
+      Name: Input TF only (SLC publishes no corrected TF)
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Update Interval: 0
+      Value: false
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: camera_init
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Transformation:
+    Current: {Class: rviz_default_plugins/TF}
+  Value: true
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
       Distance: 140
-      Yaw: 0.785398
+      Enable Stereo Rendering:
+        Stereo Eye Separation: 0.06
+        Stereo Focal Distance: 1
+        Swap Stereo Eyes: false
+        Value: false
+      Focal Point: {X: 14, Y: -41, Z: 0}
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
       Pitch: 0.94
-      Target Frame: <Fixed Frame>
-      Focal Point:
-        X: 14.28
-        Y: -40.62
-        Z: 0
+      Target Frame: camera_init
+      Value: Orbit (rviz_default_plugins)
+      Yaw: 0.785398
+    Saved: ~
 Window Geometry:
-  Width: 1400
-  Height: 900
+  Displays: {collapsed: false}
+  LOCAL FAST camera RGB image: {collapsed: false}
+  Height: 1000
+  Hide Left Dock: false
+  Hide Right Dock: false
+  Views: {collapsed: false}
+  Width: 1600
+  X: 40
+  Y: 40

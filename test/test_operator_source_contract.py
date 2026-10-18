@@ -19,6 +19,7 @@ def test_operator_topics_are_backed_by_launch_source_and_native_rviz():
     for topic in (
         "/pgo_odom",
         "/pgo_map_cloud",
+        "/simple_loop_closure/global_path",
         "/simple_loop_closure/original_keyframes",
         "/simple_loop_closure/optimized_keyframes",
         "/simple_loop_closure/loop_edges",

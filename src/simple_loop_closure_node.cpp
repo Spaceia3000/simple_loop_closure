@@ -85,6 +85,8 @@ void SimpleLoopClosureNode::initialize()
       "/simple_loop_closure/optimized_keyframes", 1);
   pub_loop_edges_ = this->create_publisher<visualization_msgs::msg::Marker>(
       "/simple_loop_closure/loop_edges", 1);
+  pub_global_path_ = this->create_publisher<nav_msgs::msg::Path>(
+      "/simple_loop_closure/global_path", 1);
 
   this->declare_parameter<bool>("mapped_cloud", true);
   this->declare_parameter<double>("time_stamp_tolerance", 0.01);
@@ -594,6 +596,11 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     stream_audit_context_->audit.contract_accepted.observe(cloud_stamp_ns, odom_stamp_ns);
   }
 
+  {
+    MtxLockGuard guard(mtx_buf_);
+    latest_accepted_odom_header_ = odom_msg->header;
+  }
+
   Affine3dPtr affine_curr(new Eigen::Affine3d);
   tf2::fromMsg(odom_msg->pose.pose, *affine_curr);
 
@@ -719,7 +726,7 @@ void SimpleLoopClosureNode::publishMapCloud(const PointCloudType::Ptr& map_cloud
   pub_map_cloud_->publish(map_cloud_msg);
 }
 
-void SimpleLoopClosureNode::constructVisualizationOdometryEdges(const int& res_size,
+void SimpleLoopClosureNode::constructVisualizationOdometryEdges(const std::vector<gtsam::Pose3>& poses,
                                                                 const std_msgs::msg::Header& header,
                                                                 visualization_msgs::msg::Marker& marker_msg)
 {
@@ -733,12 +740,11 @@ void SimpleLoopClosureNode::constructVisualizationOdometryEdges(const int& res_s
   marker_msg.color = odom_edge_color_;
 
   marker_msg.points.clear();
-  marker_msg.points.reserve(res_size * 2);
-  for (int i = 0; i < res_size - 1; i++)
+  marker_msg.points.reserve(poses.size() * 2);
+  for (std::size_t i = 0; i + 1U < poses.size(); ++i)
   {
-    MtxLockGuard guard(mtx_res_);
-    gtsam::Pose3 pose1 = optimization_result_.at<gtsam::Pose3>(i);
-    gtsam::Pose3 pose2 = optimization_result_.at<gtsam::Pose3>(i + 1);
+    const gtsam::Pose3& pose1 = poses[i];
+    const gtsam::Pose3& pose2 = poses[i + 1U];
 
     geometry_msgs::msg::Point p1, p2;
     p1.x = pose1.x();
@@ -782,15 +788,11 @@ void SimpleLoopClosureNode::constructVisualizationOriginalEdges(
   }
 }
 
-void SimpleLoopClosureNode::constructVisualizationLoopEdges(const int& res_size, const std_msgs::msg::Header& header,
+void SimpleLoopClosureNode::constructVisualizationLoopEdges(const std::vector<gtsam::Pose3>& poses,
+                                                            const std::deque<LoopEdgeID>& loop_edges,
+                                                            const std_msgs::msg::Header& header,
                                                             visualization_msgs::msg::Marker& marker_msg)
 {
-  int edge_num;
-  {
-    MtxLockGuard guard(mtx_res_);
-    edge_num = loop_edges_.size();
-  }
-
   marker_msg.header = header;
   marker_msg.ns = "loop_edges";
   marker_msg.action = visualization_msgs::msg::Marker::ADD;
@@ -801,19 +803,19 @@ void SimpleLoopClosureNode::constructVisualizationLoopEdges(const int& res_size,
   marker_msg.color = loop_edge_color_;
 
   marker_msg.points.clear();
-  marker_msg.points.reserve(edge_num * 2);
-  for (int i = 0; i < edge_num; i++)
+  marker_msg.points.reserve(loop_edges.size() * 2);
+  for (const LoopEdgeID& edge : loop_edges)
   {
-    MtxLockGuard guard(mtx_res_);
+    const int id1 = edge.first;
+    const int id2 = edge.second;
 
-    int id1 = loop_edges_[i].first;
-    int id2 = loop_edges_[i].second;
-
-    if (id1 >= res_size || id2 >= res_size)
+    if (id1 < 0 || id2 < 0 ||
+        static_cast<std::size_t>(id1) >= poses.size() ||
+        static_cast<std::size_t>(id2) >= poses.size())
       continue;
 
-    gtsam::Pose3 pose1 = optimization_result_.at<gtsam::Pose3>(id1);
-    gtsam::Pose3 pose2 = optimization_result_.at<gtsam::Pose3>(id2);
+    const gtsam::Pose3& pose1 = poses[static_cast<std::size_t>(id1)];
+    const gtsam::Pose3& pose2 = poses[static_cast<std::size_t>(id2)];
 
     geometry_msgs::msg::Point p1, p2;
     p1.x = pose1.x();
@@ -827,7 +829,8 @@ void SimpleLoopClosureNode::constructVisualizationLoopEdges(const int& res_size,
   }
 }
 
-void SimpleLoopClosureNode::constructVisualizationNodes(const int& res_size, const std_msgs::msg::Header& header,
+void SimpleLoopClosureNode::constructVisualizationNodes(const std::vector<gtsam::Pose3>& poses,
+                                                        const std_msgs::msg::Header& header,
                                                         visualization_msgs::msg::Marker& marker_msg)
 {
   marker_msg.header = header;
@@ -842,46 +845,52 @@ void SimpleLoopClosureNode::constructVisualizationNodes(const int& res_size, con
   marker_msg.color = node_color_;
 
   marker_msg.points.clear();
-  marker_msg.points.reserve(res_size);
-  for (int i = 0; i < res_size; i++)
+  marker_msg.points.reserve(poses.size());
+  for (const gtsam::Pose3& pose : poses)
   {
-    MtxLockGuard guard(mtx_res_);
-    gtsam::Pose3 pose1 = optimization_result_.at<gtsam::Pose3>(i);
-
     geometry_msgs::msg::Point p1;
-    p1.x = pose1.x();
-    p1.y = pose1.y();
-    p1.z = pose1.z();
+    p1.x = pose.x();
+    p1.y = pose.y();
+    p1.z = pose.z();
     marker_msg.points.emplace_back(p1);
   }
 }
 
 void SimpleLoopClosureNode::publishVisualizationGraph()
 {
-  int optimization_result_size;
+  std::vector<gtsam::Pose3> optimized_poses;
+  std::deque<LoopEdgeID> loop_edges;
   {
     MtxLockGuard guard(mtx_res_);
-    optimization_result_size = optimization_result_.size();
+    optimized_poses.reserve(optimization_result_.size());
+    for (std::size_t i = 0; i < optimization_result_.size(); ++i)
+      optimized_poses.emplace_back(optimization_result_.at<gtsam::Pose3>(i));
+    loop_edges = loop_edges_;
   }
 
-  if (optimization_result_size <= 0)
+  if (optimized_poses.empty())
     return;
 
   std_msgs::msg::Header header;
+  std_msgs::msg::Header path_header;
   {
     MtxLockGuard guard(mtx_buf_);
     header = latest_input_header_;
+    path_header = latest_accepted_odom_header_;
   }
-  if (header.frame_id != input_contract_.fixed_frame)
+  if (header.frame_id != input_contract_.fixed_frame ||
+      path_header.frame_id != input_contract_.fixed_frame)
     return;
 
   visualization_msgs::msg::MarkerArray marker_array_msg;
   marker_array_msg.markers.resize(4);
-  constructVisualizationOriginalEdges(optimization_result_size, header, marker_array_msg.markers[0]);
-  constructVisualizationOdometryEdges(optimization_result_size, header, marker_array_msg.markers[1]);
-  constructVisualizationLoopEdges(optimization_result_size, header, marker_array_msg.markers[2]);
-  constructVisualizationNodes(optimization_result_size, header, marker_array_msg.markers[3]);
+  constructVisualizationOriginalEdges(
+      static_cast<int>(optimized_poses.size()), header, marker_array_msg.markers[0]);
+  constructVisualizationOdometryEdges(optimized_poses, header, marker_array_msg.markers[1]);
+  constructVisualizationLoopEdges(optimized_poses, loop_edges, header, marker_array_msg.markers[2]);
+  constructVisualizationNodes(optimized_poses, header, marker_array_msg.markers[3]);
 
+  pub_global_path_->publish(simple_loop_closure::makeGlobalPath(optimized_poses, path_header));
   pub_vis_pose_graph_->publish(marker_array_msg);
   pub_original_keyframes_->publish(marker_array_msg.markers[0]);
   pub_optimized_keyframes_->publish(marker_array_msg.markers[1]);
