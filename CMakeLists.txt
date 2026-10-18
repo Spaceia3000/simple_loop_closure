@@ -106,6 +106,11 @@ if(BUILD_TESTING)
   ament_add_gtest(test_fast_livo2_contract test/test_fast_livo2_contract.cpp)
   target_include_directories(test_fast_livo2_contract PRIVATE include)
   target_link_libraries(test_fast_livo2_contract Eigen3::Eigen)
+  ament_add_gtest(test_deterministic_loop_schedule test/test_deterministic_loop_schedule.cpp)
+  target_include_directories(test_deterministic_loop_schedule PRIVATE include)
+  ament_add_gtest(test_deterministic_gtsam_schedule test/test_deterministic_gtsam_schedule.cpp)
+  target_include_directories(test_deterministic_gtsam_schedule PRIVATE include ${GTSAM_INCLUDE_DIRS})
+  target_link_libraries(test_deterministic_gtsam_schedule gtsam)
   # This host has an incompatible globally installed third-party pytest plugin.
   # Disable plugin auto-loading so the package's self-contained tests remain
   # deterministic in both CMake's discovery probe and the test invocation.

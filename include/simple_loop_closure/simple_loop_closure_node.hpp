@@ -3,6 +3,7 @@
 #define PCL_NO_PRECOMPILE
 
 #include <rclcpp/rclcpp.hpp>
+#include <simple_loop_closure/deterministic_loop_schedule.hpp>
 #include <simple_loop_closure/fast_livo2_contract.hpp>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -52,6 +53,7 @@
 #include <memory>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 
 class SimpleLoopClosureNode : public rclcpp::Node
 {
@@ -102,8 +104,7 @@ private:
     std_msgs::msg::Header latest_input_header_;
     simple_loop_closure::FastLivo2Contract input_contract_;
 
-    size_t added_odom_id_;
-    size_t searched_loop_id_;
+    std::unique_ptr<simple_loop_closure::DeterministicLoopSchedule> loop_schedule_;
 
     gtsam::ISAM2 isam2_;
     std::mutex mtx_res_;
@@ -143,11 +144,14 @@ private:
 
     std::atomic<bool> stop_loop_closure_thread_;
     std::atomic<bool> stop_visualize_thread_;
+    std::atomic<bool> shutdown_started_{false};
+    std::atomic<bool> loop_worker_failed_{false};
+    std::condition_variable keyframe_changed_;
 
     std::thread loop_close_thread_;
     std::thread visualize_thread_;
     std::thread save_thread_;
-    bool saving_;
+    std::atomic<bool> saving_;
     std::string save_directory_;
 
     void initialize();
@@ -183,21 +187,32 @@ private:
 
     void getLastOptimizedPose(Eigen::Affine3d &pose, int &id);
 
-    bool constructOdometryGraph(gtsam::NonlinearFactorGraph &graph, gtsam::Values &init_estimate);
+    bool constructNextOdometryGraph(gtsam::NonlinearFactorGraph &graph, gtsam::Values &init_estimate);
 
-    bool constructKDTreeMatrix(KDTreeMatrix &kdtree_mat);
+    bool snapshotOptimizedPrefix(std::size_t prefix_size, std::vector<Eigen::Affine3d> &poses);
 
-    int searchTarget(const KDTree &kdtree, const int &id_query, const Eigen::Affine3d &pose_query, const rclcpp::Time &stamp_query);
+    bool constructKDTreeMatrix(const std::vector<Eigen::Affine3d> &poses, KDTreeMatrix &kdtree_mat);
 
-    pcl::PointCloud<pcl::PointXYZI>::Ptr constructTargetCloud(const int target_id);
+    int searchTarget(const KDTree &kdtree, const int &id_query, const Eigen::Affine3d &pose_query,
+                     const rclcpp::Time &stamp_query, const std::vector<Eigen::Affine3d> &poses);
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr constructTargetCloud(
+        const int target_id, const std::vector<Eigen::Affine3d> &poses);
 
     pcl::PointCloud<pcl::PointXYZI>::Ptr constructSourceCloud(const int source_id);
 
     bool tryRegistration(const Eigen::Affine3d &init_pose, const PointCloudType::Ptr &source_cloud, const PointCloudType::Ptr &target_cloud, Eigen::Affine3d &result, double &score);
 
-    bool constructLoopEdge(gtsam::NonlinearFactorGraph &graph);
+    bool constructLoopEdge(const std::size_t source_id, gtsam::NonlinearFactorGraph &graph,
+                           LoopEdgeID &accepted_edge);
 
     bool updateISAM2(const gtsam::NonlinearFactorGraph &graph, const gtsam::Values &init_estimate);
+
+    void processAvailableKeyFrames();
+
+    void publishDeterminismAudit();
+
+    void shutdownAndDrain();
 
     void loopCloseThread();
 
