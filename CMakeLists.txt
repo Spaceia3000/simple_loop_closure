@@ -15,6 +15,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(GTSAM REQUIRED)
 find_package(Boost COMPONENTS filesystem REQUIRED)
@@ -47,6 +48,7 @@ ament_target_dependencies(${PROJECT_NAME}_node
   "sensor_msgs"
   "nav_msgs"
   "std_msgs"
+  "std_srvs"
   "geometry_msgs"
   "message_filters"
   "pcl_ros"
@@ -106,6 +108,8 @@ if(BUILD_TESTING)
   ament_add_gtest(test_fast_livo2_contract test/test_fast_livo2_contract.cpp)
   target_include_directories(test_fast_livo2_contract PRIVATE include)
   target_link_libraries(test_fast_livo2_contract Eigen3::Eigen)
+  ament_add_gtest(test_stream_audit test/test_stream_audit.cpp)
+  target_include_directories(test_stream_audit PRIVATE include)
   ament_add_gtest(test_deterministic_loop_schedule test/test_deterministic_loop_schedule.cpp)
   target_include_directories(test_deterministic_loop_schedule PRIVATE include)
   ament_add_gtest(test_deterministic_gtsam_schedule test/test_deterministic_gtsam_schedule.cpp)

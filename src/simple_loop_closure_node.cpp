@@ -56,6 +56,7 @@ void SimpleLoopClosureNode::initialize()
   this->declare_parameter<std::string>("expected_fixed_frame", "camera_init");
   this->declare_parameter<std::string>("expected_body_frame", "aft_mapped");
   this->declare_parameter<bool>("require_exact_timestamps", true);
+  this->declare_parameter<bool>("simple_stream_audit", false);
 
   this->get_parameter("mapped_cloud", mapped_cloud_);
   this->get_parameter("time_stamp_tolerance", time_stamp_tolerance_);
@@ -75,6 +76,7 @@ void SimpleLoopClosureNode::initialize()
   this->get_parameter("expected_fixed_frame", input_contract_.fixed_frame);
   this->get_parameter("expected_body_frame", input_contract_.body_frame);
   this->get_parameter("require_exact_timestamps", input_contract_.require_exact_stamp);
+  this->get_parameter("simple_stream_audit", stream_audit_enabled_);
 
   if (!mapped_cloud_)
     throw std::invalid_argument(
@@ -94,6 +96,40 @@ void SimpleLoopClosureNode::initialize()
 
   sub_cloud_.subscribe(this, "/cloud");
   sub_odom_.subscribe(this, "/odometry");
+
+  if (stream_audit_enabled_)
+  {
+    stream_audit_context_ = std::make_shared<StreamAuditContext>();
+    const std::weak_ptr<StreamAuditContext> weak_context(stream_audit_context_);
+    // These independent taps are registered before the synchronizer, so their
+    // counts describe subscription ingress rather than synchronized output.
+    cloud_audit_connection_ = sub_cloud_.registerCallback(
+        [weak_context](const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) {
+          if (const auto context = weak_context.lock())
+          {
+            std::lock_guard<std::mutex> guard(context->mutex);
+            context->audit.cloud_ingress.observe(rclcpp::Time(msg->header.stamp).nanoseconds());
+          }
+        });
+    odom_audit_connection_ = sub_odom_.registerCallback(
+        [weak_context](const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
+          if (const auto context = weak_context.lock())
+          {
+            std::lock_guard<std::mutex> guard(context->mutex);
+            context->audit.odom_ingress.observe(rclcpp::Time(msg->header.stamp).nanoseconds());
+          }
+        });
+
+    stream_audit_service_ = this->create_service<std_srvs::srv::Trigger>(
+        "~/dump_stream_audit",
+        [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+               std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+          response->message = makeStreamAuditReport("snapshot");
+          response->success = !response->message.empty();
+          if (response->success)
+            std::cout << response->message << std::endl;
+        });
+  }
 
   synchronizer_ = std::make_shared<Sync>(SyncPolicy(50), sub_cloud_, sub_odom_);
   synchronizer_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(time_stamp_tolerance_));
@@ -155,6 +191,30 @@ void SimpleLoopClosureNode::initialize()
   visualize_thread_ = std::thread(&SimpleLoopClosureNode::visualizeThread, this);
 
   RCLCPP_INFO(this->get_logger(), "Loop Closure Node Initialized.");
+}
+
+simple_loop_closure::StreamAuditSnapshot SimpleLoopClosureNode::captureStreamAuditSnapshot()
+{
+  simple_loop_closure::StreamAuditSnapshot snapshot;
+  std::scoped_lock guard(stream_audit_context_->mutex, mtx_buf_, mtx_res_);
+  snapshot.audit = stream_audit_context_->audit;
+  snapshot.keyframes_stored = keyframes_odom_.size();
+  snapshot.loop_factors = loop_edges_.size();
+  return snapshot;
+}
+
+std::string SimpleLoopClosureNode::makeStreamAuditReport(const char* report_kind)
+{
+  if (!stream_audit_context_)
+    return {};
+  return simple_loop_closure::formatStreamAuditReport(captureStreamAuditSnapshot(), report_kind);
+}
+
+void SimpleLoopClosureNode::emitStreamAudit(const char* report_kind)
+{
+  const std::string report = makeStreamAuditReport(report_kind);
+  if (!report.empty())
+    std::cout << report << std::endl;
 }
 
 bool SimpleLoopClosureNode::inputContractValid(
@@ -319,6 +379,12 @@ void SimpleLoopClosureNode::publishPoseGraphOptimizedOdometry(const Eigen::Affin
 
   nav_msgs::msg::Odometry pgo_odom_msg = odom_msg;
   pgo_odom_msg.pose.pose = tf2::toMsg(pgo_affine);
+  if (stream_audit_context_)
+  {
+    std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
+    stream_audit_context_->audit.pgo_publish_calls.observe(
+        rclcpp::Time(pgo_odom_msg.header.stamp).nanoseconds());
+  }
   pub_pgo_odometry_->publish(pgo_odom_msg);
 }
 
@@ -326,8 +392,21 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr& cloud_msg,
     const nav_msgs::msg::Odometry::ConstSharedPtr& odom_msg)
 {
+  const std::int64_t cloud_stamp_ns = rclcpp::Time(cloud_msg->header.stamp).nanoseconds();
+  const std::int64_t odom_stamp_ns = rclcpp::Time(odom_msg->header.stamp).nanoseconds();
+  if (stream_audit_context_)
+  {
+    std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
+    stream_audit_context_->audit.sync_callbacks.observe(cloud_stamp_ns, odom_stamp_ns);
+  }
+
   if (!inputContractValid(*cloud_msg, *odom_msg))
   {
+    if (stream_audit_context_)
+    {
+      std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
+      stream_audit_context_->audit.contract_rejected.observe(cloud_stamp_ns, odom_stamp_ns);
+    }
     RCLCPP_ERROR(
         this->get_logger(),
         "Rejecting FAST-LIVO2 pair: cloud frame='%s', odom frame='%s', child='%s', cloud stamp=%ld, odom stamp=%ld",
@@ -342,6 +421,12 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
   Affine3dPtr affine_curr(new Eigen::Affine3d);
   tf2::fromMsg(odom_msg->pose.pose, *affine_curr);
 
+  if (stream_audit_context_)
+  {
+    std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
+    stream_audit_context_->audit.pcl_converted.observe(cloud_stamp_ns, odom_stamp_ns);
+  }
+
   publishPoseGraphOptimizedOdometry(*affine_curr, *odom_msg);
 
   if (mapped_cloud_)
@@ -353,6 +438,7 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     cloud_curr = cloud_base;
   }
 
+  bool keyframe_skipped = false;
   {
     MtxLockGuard guard(mtx_buf_);
     if (!keyframes_odom_.empty())
@@ -363,8 +449,9 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
       const Eigen::Quaterniond quat_curr(affine_curr->rotation());
       const double angle = quat_prev.angularDistance(quat_curr);
       if (distance < keyframe_dist_th_ && angle < keyframe_angular_dist_th_)
-        return;
-      trajectory_dist_.push_back(trajectory_dist_.back() + distance);
+        keyframe_skipped = true;
+      else
+        trajectory_dist_.push_back(trajectory_dist_.back() + distance);
     }
     else
     {
@@ -372,10 +459,26 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
       trajectory_dist_.push_back(0);
     }
 
-    keyframes_cloud_.push_back(cloud_curr);
-    keyframes_odom_.push_back(affine_curr);
-    latest_input_header_ = odom_msg->header;
+    if (!keyframe_skipped)
+    {
+      keyframes_cloud_.push_back(cloud_curr);
+      keyframes_odom_.push_back(affine_curr);
+      latest_input_header_ = odom_msg->header;
+    }
   }
+  if (stream_audit_context_)
+  {
+    std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
+    if (keyframe_skipped)
+      stream_audit_context_->audit.keyframe_skipped.observe(odom_stamp_ns);
+    else
+    {
+      stream_audit_context_->audit.keyframe_selected.observe(odom_stamp_ns);
+      stream_audit_context_->audit.keyframes_inserted.observe(odom_stamp_ns);
+    }
+  }
+  if (keyframe_skipped)
+    return;
   keyframe_changed_.notify_one();
 }
 
@@ -1000,6 +1103,9 @@ void SimpleLoopClosureNode::shutdownAndDrain()
     RCLCPP_WARN(this->get_logger(), "Unable to publish the final graph snapshot: %s", exception.what());
   }
   publishDeterminismAudit();
+  cloud_audit_connection_.disconnect();
+  odom_audit_connection_.disconnect();
+  emitStreamAudit("shutdown");
 }
 
 void SimpleLoopClosureNode::visualizeThread()

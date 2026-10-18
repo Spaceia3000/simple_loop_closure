@@ -5,11 +5,13 @@
 #include <rclcpp/rclcpp.hpp>
 #include <simple_loop_closure/deterministic_loop_schedule.hpp>
 #include <simple_loop_closure/fast_livo2_contract.hpp>
+#include <simple_loop_closure/stream_audit.hpp>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
 #include <std_msgs/msg/color_rgba.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
@@ -83,7 +85,19 @@ private:
 
     message_filters::Subscriber<sensor_msgs::msg::PointCloud2> sub_cloud_;
     message_filters::Subscriber<nav_msgs::msg::Odometry> sub_odom_;
+    message_filters::Connection cloud_audit_connection_;
+    message_filters::Connection odom_audit_connection_;
     std::shared_ptr<Sync> synchronizer_;
+
+    struct StreamAuditContext
+    {
+      std::mutex mutex;
+      simple_loop_closure::StreamAudit audit;
+    };
+
+    bool stream_audit_enabled_;
+    std::shared_ptr<StreamAuditContext> stream_audit_context_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stream_audit_service_;
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_save_req_;
 
@@ -155,6 +169,12 @@ private:
     std::string save_directory_;
 
     void initialize();
+
+    simple_loop_closure::StreamAuditSnapshot captureStreamAuditSnapshot();
+
+    std::string makeStreamAuditReport(const char* report_kind);
+
+    void emitStreamAudit(const char* report_kind);
 
     bool saveEachFrames();
 
