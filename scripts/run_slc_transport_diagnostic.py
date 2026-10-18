@@ -33,7 +33,12 @@ from transport_diagnostic_common import (
 DEFAULT_CLOUD_TOPIC = "/cloud_registered_metric"
 DEFAULT_ODOM_TOPIC = "/aft_mapped_to_init"
 DEFAULT_PGO_TOPIC = "/pgo_odom"
-DIAGNOSTIC_SCHEMA_VERSION = "slc-transport-diagnostic-v3"
+DIAGNOSTIC_SCHEMA_VERSION = "slc-transport-diagnostic-v4"
+STREAM_AUDIT_MARKER = "SC_SIMPLE_STREAM_AUDIT"
+DEFAULT_STREAM_AUDIT_SERVICE = "/simple_loop_closure/dump_stream_audit"
+FNV1A64_OFFSET_BASIS = 14695981039346656037
+FNV1A64_PRIME = 1099511628211
+UINT64_MASK = (1 << 64) - 1
 
 
 class PlaybackTimeoutError(DiagnosticError):
@@ -46,6 +51,24 @@ class PlaybackTimeoutError(DiagnosticError):
             "rosbag playback exceeded configured "
             f"--playback-timeout-sec {timeout:g} after {elapsed:.6f} monotonic seconds"
         )
+
+
+class VerifiedDrainTimeoutError(DiagnosticError):
+    """The explicitly bounded native-completion interval expired."""
+
+    def __init__(self, timeout: float, attempts: int, last_observation: str):
+        self.timeout_seconds = timeout
+        self.attempts = attempts
+        self.last_observation = last_observation
+        super().__init__(
+            "verified drain did not reach two stable complete native snapshots "
+            f"within --verified-drain-timeout-sec {timeout:g} "
+            f"({attempts} service attempts; last={last_observation})"
+        )
+
+
+class StreamAuditServiceUnavailableError(DiagnosticError):
+    """A bounded Trigger attempt could not obtain a response."""
 
 
 def _positive(value: str) -> float:
@@ -91,6 +114,24 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--startup-sec", type=_positive, default=3.0)
     run.add_argument("--endpoint-snapshot-delay-sec", type=_positive, default=0.5)
     run.add_argument("--drain-sec", type=_positive, default=2.0)
+    run.add_argument(
+        "--verified-drain",
+        action="store_true",
+        help=(
+            "replace the fixed drain sleep with bounded native stream-audit "
+            "completion; requires --verified-drain-timeout-sec"
+        ),
+    )
+    run.add_argument(
+        "--verified-drain-timeout-sec",
+        type=_positive,
+        help="finite positive wall-clock bound for --verified-drain",
+    )
+    run.add_argument(
+        "--stream-audit-service",
+        default=DEFAULT_STREAM_AUDIT_SERVICE,
+        help="native std_srvs/srv/Trigger snapshot service",
+    )
     run.add_argument("--shutdown-timeout-sec", type=_positive, default=10.0)
     run.add_argument(
         "--playback-timeout-sec",
@@ -400,9 +441,264 @@ def diagnostic_git_commit() -> str | None:
 def certification_requirements(args: argparse.Namespace) -> tuple[bool, bool]:
     """Resolve the two opt-in gates, including the unified certification flag."""
     return (
-        bool(args.require_backend_audits or args.certify_all),
+        bool(args.require_backend_audits or args.certify_all or args.verified_drain),
         bool(args.require_external_stamp_integrity or args.certify_all),
     )
+
+
+def _fnv1a64_stamps(stamps: Sequence[int]) -> int:
+    """Match appendStampFnv1a64's signed-int64, little-endian byte order."""
+    digest = FNV1A64_OFFSET_BASIS
+    for stamp in stamps:
+        value = int(stamp) & UINT64_MASK
+        for _ in range(8):
+            digest ^= value & 0xff
+            digest = (digest * FNV1A64_PRIME) & UINT64_MASK
+            value >>= 8
+    return digest
+
+
+def expected_verified_drain_fields(
+    source_inventory: Mapping[str, list[dict[str, int]]],
+    cloud_topic: str,
+    odom_topic: str,
+) -> dict[str, object]:
+    """Build exact native count/digest expectations from source SQLite order."""
+    cloud = [int(record["header_ns"]) for record in source_inventory[cloud_topic]]
+    odom = [int(record["header_ns"]) for record in source_inventory[odom_topic]]
+    if not cloud or cloud != odom or len(set(cloud)) != len(cloud):
+        raise DiagnosticError(
+            "verified drain requires nonempty, unique, exactly ordered and equal "
+            "source cloud/odometry header stamps"
+        )
+    pairs = [stamp for pair in zip(cloud, odom) for stamp in pair]
+    reversals = sum(current < previous for previous, current in zip(cloud, cloud[1:]))
+    return {
+        "count": len(cloud),
+        "cloud_fnv64": f"0x{_fnv1a64_stamps(cloud):016x}",
+        "odom_fnv64": f"0x{_fnv1a64_stamps(odom):016x}",
+        "pair_fnv64": f"0x{_fnv1a64_stamps(pairs):016x}",
+        "first_ns": cloud[0],
+        "last_ns": cloud[-1],
+        "adjacent_duplicates": 0,
+        "reversals": reversals,
+    }
+
+
+def parse_stream_audit_snapshot(output: str) -> dict[str, str]:
+    """Extract exactly one Trigger response payload without trusting CLI framing."""
+    normalized = output.lower()
+    if "success=false" in normalized or "success: false" in normalized:
+        raise DiagnosticError("stream-audit Trigger response reported success=false")
+    if "success=true" not in normalized and "success: true" not in normalized:
+        raise DiagnosticError("stream-audit Trigger response is missing success=true")
+    candidates: list[dict[str, str]] = []
+    errors: list[str] = []
+    for line in output.splitlines():
+        if STREAM_AUDIT_MARKER not in line:
+            continue
+        payload = line[line.index(STREAM_AUDIT_MARKER):]
+        # ros2 service call commonly wraps message='...'; audit values themselves
+        # contain no whitespace or quotes.  Removing the wrapper is deterministic.
+        payload = payload.split("'", 1)[0].split('"', 1)[0].rstrip(")},]")
+        try:
+            fields = _parse_audit_payload(payload, STREAM_AUDIT_MARKER)
+        except DiagnosticError as exc:
+            errors.append(str(exc))
+            continue
+        if fields.get("report") == "snapshot":
+            candidates.append(fields)
+    if errors:
+        raise DiagnosticError("malformed stream-audit service response: " + "; ".join(errors))
+    if len(candidates) != 1:
+        raise DiagnosticError(
+            "stream-audit service response must contain exactly one "
+            f"report=snapshot payload, found {len(candidates)}"
+        )
+    return candidates[0]
+
+
+def _digest_field(fields: Mapping[str, str], key: str) -> str:
+    try:
+        value = fields[key]
+    except KeyError as exc:
+        raise DiagnosticError(f"{STREAM_AUDIT_MARKER} audit missing field {key}") from exc
+    try:
+        parsed = int(value, 16)
+    except ValueError as exc:
+        raise DiagnosticError(
+            f"{STREAM_AUDIT_MARKER} audit field {key} is not hexadecimal: {value!r}"
+        ) from exc
+    if parsed < 0 or parsed > UINT64_MASK:
+        raise DiagnosticError(f"{STREAM_AUDIT_MARKER} audit field {key} is outside uint64")
+    return f"0x{parsed:016x}"
+
+
+def evaluate_verified_drain_snapshot(
+    fields: Mapping[str, str], expected: Mapping[str, object]
+) -> str:
+    """Return pending/complete, or fail immediately on irreversible divergence."""
+    expected_count = int(expected["count"])
+    count_keys = (
+        "cloud_ingress_count", "odom_ingress_count", "sync_callback_count",
+        "sync_callback_cloud_count", "sync_callback_odom_count",
+        "contract_accepted_count", "contract_accepted_cloud_count",
+        "contract_accepted_odom_count", "pgo_publish_attempted_count",
+        "pgo_publish_completed_count",
+    )
+    counts = {
+        key: _integer_field(fields, STREAM_AUDIT_MARKER, key) for key in count_keys
+    }
+    zero_keys = (
+        "contract_rejected_count", "pgo_publish_failed_count",
+        "sync_callback_mismatches", "contract_accepted_mismatches",
+    )
+    zeros = {key: _integer_field(fields, STREAM_AUDIT_MARKER, key) for key in zero_keys}
+    divergent = [f"{key}={value}" for key, value in counts.items() if value > expected_count]
+    divergent.extend(f"{key}={value}" for key, value in zeros.items() if value != 0)
+    if divergent:
+        raise DiagnosticError(
+            "verified drain observed irreversible count divergence: " + ", ".join(divergent)
+        )
+    if any(value < expected_count for value in counts.values()):
+        return "pending"
+
+    digest_expectations = {
+        "cloud_ingress_fnv64": expected["cloud_fnv64"],
+        "odom_ingress_fnv64": expected["odom_fnv64"],
+        "sync_callback_pair_fnv64": expected["pair_fnv64"],
+        "sync_callback_cloud_fnv64": expected["cloud_fnv64"],
+        "sync_callback_odom_fnv64": expected["odom_fnv64"],
+        "contract_accepted_pair_fnv64": expected["pair_fnv64"],
+        "contract_accepted_cloud_fnv64": expected["cloud_fnv64"],
+        "contract_accepted_odom_fnv64": expected["odom_fnv64"],
+        "pgo_publish_attempted_fnv64": expected["odom_fnv64"],
+        "pgo_publish_completed_fnv64": expected["odom_fnv64"],
+    }
+    mismatches = [
+        f"{key}={_digest_field(fields, key)} expected {wanted}"
+        for key, wanted in digest_expectations.items()
+        if _digest_field(fields, key) != wanted
+    ]
+    sequence_names = (
+        "cloud_ingress", "odom_ingress", "sync_callback_cloud",
+        "sync_callback_odom", "contract_accepted_cloud",
+        "contract_accepted_odom", "pgo_publish_attempted",
+        "pgo_publish_completed",
+    )
+    for name in sequence_names:
+        for suffix in ("adjacent_duplicates", "reversals", "first_ns", "last_ns"):
+            key = f"{name}_{suffix}"
+            actual = (
+                _signed_integer_field(fields, STREAM_AUDIT_MARKER, key)
+                if suffix in ("first_ns", "last_ns")
+                else _integer_field(fields, STREAM_AUDIT_MARKER, key)
+            )
+            wanted = int(expected[suffix])
+            if actual != wanted:
+                mismatches.append(f"{key}={actual} expected {wanted}")
+    required_true = (
+        "sync_accounting_ok", "contract_accepted_to_pgo_attempted_count_ok",
+        "contract_accepted_to_pgo_attempted_ordered_digest_ok",
+        "pgo_publish_outcome_accounting_ok", "pgo_publish_no_failures",
+        "pgo_publish_attempted_to_completed_count_ok",
+        "pgo_publish_attempted_to_completed_ordered_digest_ok",
+    )
+    mismatches.extend(
+        f"{key}={fields.get(key, 'MISSING')} expected true"
+        for key in required_true if fields.get(key) != "true"
+    )
+    if fields.get("report") != "snapshot":
+        mismatches.append(f"report={fields.get('report', 'MISSING')} expected snapshot")
+    if fields.get("status") != "PASS":
+        mismatches.append(f"status={fields.get('status', 'MISSING')} expected PASS")
+    if mismatches:
+        raise DiagnosticError("verified drain snapshot mismatch: " + "; ".join(mismatches))
+    return "complete"
+
+
+def request_stream_audit_snapshot(
+    service: str, env: dict[str, str], timeout: float
+) -> dict[str, str]:
+    """Call one Trigger service in an owned subprocess with a strict wait bound."""
+    command = ["ros2", "service", "call", service, "std_srvs/srv/Trigger", "{}"]
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True
+    )
+    try:
+        output, _ = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        try:
+            output, _ = process.communicate(timeout=min(1.0, timeout))
+        except subprocess.TimeoutExpired as reap_exc:
+            raise StreamAuditServiceUnavailableError(
+                "stream-audit service subprocess could not be reaped after SIGKILL"
+            ) from reap_exc
+        raise StreamAuditServiceUnavailableError(
+            f"stream-audit service call timed out after {timeout:g} seconds"
+        ) from exc
+    if process.returncode != 0:
+        raise StreamAuditServiceUnavailableError(
+            f"stream-audit service call exited {process.returncode}: {output.strip()}"
+        )
+    return parse_stream_audit_snapshot(output)
+
+
+def wait_for_verified_drain(
+    source_inventory: Mapping[str, list[dict[str, int]]],
+    cloud_topic: str,
+    odom_topic: str,
+    service: str,
+    env: dict[str, str],
+    timeout: float,
+    managed_processes: Sequence[tuple[str, subprocess.Popen[bytes], object]],
+    *,
+    snapshot_request=request_stream_audit_snapshot,
+) -> dict[str, object]:
+    """Wait for two identical, exact full-source native snapshots."""
+    expected = expected_verified_drain_fields(source_inventory, cloud_topic, odom_topic)
+    started = time.monotonic()
+    attempts = 0
+    last_observation = "no service response"
+    previous_complete: dict[str, str] | None = None
+    while True:
+        elapsed = time.monotonic() - started
+        remaining = timeout - elapsed
+        if remaining <= 0.0:
+            raise VerifiedDrainTimeoutError(timeout, attempts, last_observation)
+        exited = [
+            f"{name}={process.poll()}" for name, process, _ in managed_processes
+            if process.poll() is not None
+        ]
+        if exited:
+            raise DiagnosticError(
+                "managed process exited during verified drain: " + ", ".join(exited)
+            )
+        attempts += 1
+        try:
+            fields = snapshot_request(service, env, min(2.0, remaining))
+            state = evaluate_verified_drain_snapshot(fields, expected)
+            last_observation = state
+        except StreamAuditServiceUnavailableError as exc:
+            last_observation = str(exc)
+            previous_complete = None
+        else:
+            if state == "complete":
+                if previous_complete == fields:
+                    return {
+                        "status": "PASS", "attempts": attempts,
+                        "elapsed_monotonic_seconds": time.monotonic() - started,
+                        "stable_snapshot_count": 2, "expected": expected,
+                        "snapshot": dict(fields),
+                    }
+                previous_complete = dict(fields)
+            else:
+                previous_complete = None
+        remaining = timeout - (time.monotonic() - started)
+        if remaining <= 0.0:
+            raise VerifiedDrainTimeoutError(timeout, attempts, last_observation)
+        time.sleep(min(0.1, remaining))
 
 
 def validate_source_inventory(
@@ -482,11 +778,25 @@ def _integer_field(fields: Mapping[str, str], marker: str, key: str) -> int:
     return parsed
 
 
+def _signed_integer_field(fields: Mapping[str, str], marker: str, key: str) -> int:
+    try:
+        value = fields[key]
+    except KeyError as exc:
+        raise DiagnosticError(f"{marker} audit missing field {key}") from exc
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise DiagnosticError(
+            f"{marker} audit field {key} is not an integer: {value!r}"
+        ) from exc
+
+
 def validate_backend_audits(
     backend_log: Path,
     source_inventory: Mapping[str, list[dict[str, int]]],
     cloud_topic: str,
     odom_topic: str,
+    verified_drain_expected: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Validate the two native shutdown contracts required for graph certification."""
     text = backend_log.read_text(encoding="utf-8", errors="replace")
@@ -620,6 +930,20 @@ def validate_backend_audits(
             "reported_checks": booleans,
             "status": "PASS" if not accounting_errors else "FAIL",
         }
+        if verified_drain_expected is not None:
+            try:
+                final_fields = dict(stream)
+                final_fields["report"] = "snapshot"
+                evaluate_verified_drain_snapshot(final_fields, verified_drain_expected)
+            except DiagnosticError as exc:
+                errors.append(f"verified-drain final audit mismatch: {exc}")
+                result["stream_shutdown_audit"]["verified_drain_exactness"] = {
+                    "status": "FAIL", "error": str(exc),
+                }
+            else:
+                result["stream_shutdown_audit"]["verified_drain_exactness"] = {
+                    "status": "PASS"
+                }
 
     if not errors:
         result["status"] = "PASS"
@@ -631,6 +955,14 @@ def validate_backend_audits(
 def run_diagnostic(args: argparse.Namespace) -> int:
     if args.playback_rate != 1.0:
         raise DiagnosticError("this diagnostic requires explicit real-time --playback-rate 1.0")
+    if args.verified_drain and args.verified_drain_timeout_sec is None:
+        raise DiagnosticError(
+            "--verified-drain requires explicit --verified-drain-timeout-sec"
+        )
+    if not args.verified_drain and args.verified_drain_timeout_sec is not None:
+        raise DiagnosticError(
+            "--verified-drain-timeout-sec requires --verified-drain"
+        )
     source_bag = args.bag.resolve()
     output_dir = args.output_dir.resolve()
     if output_dir.exists():
@@ -659,7 +991,7 @@ def run_diagnostic(args: argparse.Namespace) -> int:
         source_inventory,
         args.cloud_topic,
         args.odom_topic,
-        certify_all=args.certify_all,
+        certify_all=bool(args.certify_all or args.verified_drain),
         expected_source_count=args.expected_source_count,
         metadata_topic_counts=source_metadata_counts,
     )
@@ -728,6 +1060,12 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             "require_backend_audits": require_backend_audits,
             "require_external_stamp_integrity": require_external_stamp_integrity,
             "certify_all": args.certify_all,
+            "verified_drain": {
+                "requested": args.verified_drain,
+                "requires_two_stable_complete_snapshots": args.verified_drain,
+                "service": args.stream_audit_service if args.verified_drain else None,
+                "timeout_seconds": args.verified_drain_timeout_sec,
+            },
             "full_source_contract": {
                 "requested": args.certify_all,
                 "enforced_only_for_complete_replay": True,
@@ -752,6 +1090,8 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             "startup": args.startup_sec,
             "endpoint_snapshot_delay": args.endpoint_snapshot_delay_sec,
             "drain": args.drain_sec,
+            "drain_mode": "verified" if args.verified_drain else "fixed",
+            "verified_drain_timeout": args.verified_drain_timeout_sec,
             "shutdown_timeout": args.shutdown_timeout_sec,
             "playback_timeout": args.playback_timeout_sec,
         },
@@ -776,6 +1116,11 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             "bag_content_duration_seconds": bag_duration,
             "elapsed_monotonic_seconds": None,
             "effective_throughput_rate": None,
+        },
+        "verified_drain": {
+            "requested": args.verified_drain,
+            "status": "pending" if args.verified_drain else "not_requested",
+            "timeout_seconds": args.verified_drain_timeout_sec,
         },
     }
     primary_error: BaseException | None = None
@@ -805,11 +1150,37 @@ def run_diagnostic(args: argparse.Namespace) -> int:
         status["playback"]["completed"] = True
         if bag_duration is not None and playback_elapsed > 0.0:
             status["playback"]["effective_throughput_rate"] = bag_duration / playback_elapsed
-        time.sleep(args.drain_sec)
+        if args.verified_drain:
+            verified_result = wait_for_verified_drain(
+                source_inventory,
+                args.cloud_topic,
+                args.odom_topic,
+                args.stream_audit_service,
+                env,
+                args.verified_drain_timeout_sec,
+                processes[:3],
+            )
+            status["verified_drain"] = {
+                "requested": True,
+                "timeout_seconds": args.verified_drain_timeout_sec,
+                **verified_result,
+            }
+            write_json(output_dir / "verified_drain.json", status["verified_drain"])
+        else:
+            time.sleep(args.drain_sec)
     except BaseException as exc:
         if isinstance(exc, PlaybackTimeoutError):
             status["playback"]["timed_out"] = True
             status["playback"]["elapsed_monotonic_seconds"] = exc.elapsed_seconds
+        if args.verified_drain and status["verified_drain"]["status"] == "pending":
+            status["verified_drain"]["status"] = "TIMEOUT" if isinstance(
+                exc, VerifiedDrainTimeoutError
+            ) else "FAIL"
+            status["verified_drain"]["error"] = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, VerifiedDrainTimeoutError):
+                status["verified_drain"]["attempts"] = exc.attempts
+                status["verified_drain"]["last_observation"] = exc.last_observation
+            write_json(output_dir / "verified_drain.json", status["verified_drain"])
         status["error"] = f"{type(exc).__name__}: {exc}"
         primary_error = exc
         primary_traceback = exc.__traceback__
@@ -835,6 +1206,13 @@ def run_diagnostic(args: argparse.Namespace) -> int:
                 source_inventory,
                 args.cloud_topic,
                 args.odom_topic,
+                (
+                    expected_verified_drain_fields(
+                        source_inventory, args.cloud_topic, args.odom_topic
+                    )
+                    if args.verified_drain
+                    else None
+                ),
             )
             status["backend_validation"] = backend_validation
             if backend_validation["status"] != "PASS" and primary_error is None:

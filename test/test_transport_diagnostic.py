@@ -39,6 +39,68 @@ def passing_backend_audits(count=2):
     )
 
 
+def verified_snapshot_fields(stamps=(1, 2), count=None):
+    expected = runner.expected_verified_drain_fields(
+        {
+            CLOUD: [{"header_ns": stamp} for stamp in stamps],
+            ODOM: [{"header_ns": stamp} for stamp in stamps],
+        },
+        CLOUD,
+        ODOM,
+    )
+    observed_count = len(stamps) if count is None else count
+    fields = {
+        "version": "8", "report": "snapshot", "status": "PASS",
+        "contract_rejected_count": "0", "pgo_publish_failed_count": "0",
+        "sync_callback_mismatches": "0", "contract_accepted_mismatches": "0",
+        "sync_accounting_ok": "true",
+        "contract_accepted_to_pgo_attempted_ok": "true",
+        "contract_accepted_to_pgo_attempted_count_ok": "true",
+        "contract_accepted_to_pgo_attempted_ordered_digest_ok": "true",
+        "pgo_publish_outcome_accounting_ok": "true",
+        "pgo_publish_no_failures": "true",
+        "pgo_publish_attempted_to_completed_count_ok": "true",
+        "pgo_publish_attempted_to_completed_ordered_digest_ok": "true",
+    }
+    for key in (
+        "cloud_ingress_count", "odom_ingress_count", "sync_callback_count",
+        "sync_callback_cloud_count", "sync_callback_odom_count",
+        "contract_accepted_count", "contract_accepted_cloud_count",
+        "contract_accepted_odom_count", "pgo_publish_attempted_count",
+        "pgo_publish_completed_count",
+    ):
+        fields[key] = str(observed_count)
+    fields.update({
+        "cloud_ingress_fnv64": expected["cloud_fnv64"],
+        "odom_ingress_fnv64": expected["odom_fnv64"],
+        "sync_callback_pair_fnv64": expected["pair_fnv64"],
+        "sync_callback_cloud_fnv64": expected["cloud_fnv64"],
+        "sync_callback_odom_fnv64": expected["odom_fnv64"],
+        "contract_accepted_pair_fnv64": expected["pair_fnv64"],
+        "contract_accepted_cloud_fnv64": expected["cloud_fnv64"],
+        "contract_accepted_odom_fnv64": expected["odom_fnv64"],
+        "pgo_publish_attempted_fnv64": expected["odom_fnv64"],
+        "pgo_publish_completed_fnv64": expected["odom_fnv64"],
+    })
+    for name in (
+        "cloud_ingress", "odom_ingress", "sync_callback_cloud",
+        "sync_callback_odom", "contract_accepted_cloud",
+        "contract_accepted_odom", "pgo_publish_attempted",
+        "pgo_publish_completed",
+    ):
+        fields[f"{name}_adjacent_duplicates"] = str(expected["adjacent_duplicates"])
+        fields[f"{name}_reversals"] = str(expected["reversals"])
+        fields[f"{name}_first_ns"] = str(expected["first_ns"])
+        fields[f"{name}_last_ns"] = str(expected["last_ns"])
+    return fields
+
+
+def stream_audit_line(fields):
+    return "SC_SIMPLE_STREAM_AUDIT " + " ".join(
+        f"{key}={value}" for key, value in fields.items()
+    )
+
+
 class SuccessfulFakeProcess:
     next_pid = 700
 
@@ -503,6 +565,202 @@ def test_playback_timeout_is_opt_in():
     assert args.playback_timeout_sec is None
 
 
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+def test_verified_drain_timeout_requires_finite_positive_value(value):
+    with pytest.raises(SystemExit):
+        runner.parser().parse_args(
+            [
+                "run", "--bag", "bag", "--output-dir", "out", "--domain-id", "166",
+                "--subscriber-qos-profile", "reliable", "--verified-drain",
+                "--verified-drain-timeout-sec", value,
+            ]
+        )
+
+
+def test_verified_drain_requires_explicit_timeout_before_touching_bag(tmp_path, monkeypatch):
+    args = runner.parser().parse_args(
+        [
+            "run", "--bag", "missing", "--output-dir", str(tmp_path / "out"),
+            "--domain-id", "166", "--subscriber-qos-profile", "reliable",
+            "--verified-drain",
+        ]
+    )
+    inspect = Mock(side_effect=AssertionError("bag must not be inspected"))
+    monkeypatch.setattr(runner, "inspect_bag", inspect)
+
+    with pytest.raises(diagnostic.DiagnosticError, match="requires explicit"):
+        runner.run_diagnostic(args)
+
+    inspect.assert_not_called()
+
+
+def test_stream_audit_trigger_output_parser_accepts_ros2_cli_wrapper():
+    fields = verified_snapshot_fields()
+    output = (
+        "waiting for service to become available...\n"
+        "response:\nstd_srvs.srv.Trigger_Response(success=True, message='"
+        + stream_audit_line(fields)
+        + "')\n"
+    )
+
+    assert runner.parse_stream_audit_snapshot(output) == fields
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "response without marker",
+        "SC_SIMPLE_STREAM_AUDIT report=snapshot broken-token",
+        "SC_SIMPLE_STREAM_AUDIT report=snapshot status=PASS\n"
+        "SC_SIMPLE_STREAM_AUDIT report=snapshot status=PASS",
+    ],
+)
+def test_stream_audit_trigger_output_parser_fails_closed(output):
+    with pytest.raises(diagnostic.DiagnosticError):
+        runner.parse_stream_audit_snapshot(output)
+
+
+def test_verified_snapshot_requires_exact_counts_digests_and_pair_cardinality():
+    expected = runner.expected_verified_drain_fields(
+        {CLOUD: [{"header_ns": 1}, {"header_ns": 2}],
+         ODOM: [{"header_ns": 1}, {"header_ns": 2}]},
+        CLOUD,
+        ODOM,
+    )
+    complete = verified_snapshot_fields()
+    assert runner.evaluate_verified_drain_snapshot(complete, expected) == "complete"
+
+    pending = dict(complete)
+    for key in tuple(pending):
+        if key.endswith("_count") and key not in (
+            "contract_rejected_count", "pgo_publish_failed_count"
+        ):
+            pending[key] = "1"
+    assert runner.evaluate_verified_drain_snapshot(pending, expected) == "pending"
+
+    bad_digest = dict(complete, sync_callback_pair_fnv64="0x0000000000000000")
+    with pytest.raises(diagnostic.DiagnosticError, match="pair_fnv64"):
+        runner.evaluate_verified_drain_snapshot(bad_digest, expected)
+
+    unexpected = dict(complete, cloud_ingress_count="3")
+    with pytest.raises(diagnostic.DiagnosticError, match="irreversible count divergence"):
+        runner.evaluate_verified_drain_snapshot(unexpected, expected)
+
+
+def test_verified_drain_completes_only_after_two_identical_snapshots(monkeypatch):
+    source = {
+        CLOUD: [{"header_ns": 1}, {"header_ns": 2}],
+        ODOM: [{"header_ns": 1}, {"header_ns": 2}],
+    }
+    pending = verified_snapshot_fields(count=1)
+    complete = verified_snapshot_fields()
+    snapshots = iter((pending, complete, complete))
+    request = Mock(side_effect=lambda *_args: next(snapshots))
+    process = Mock()
+    process.poll.return_value = None
+    monkeypatch.setattr(runner.time, "monotonic", Mock(return_value=10.0))
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+
+    result = runner.wait_for_verified_drain(
+        source, CLOUD, ODOM, "/audit", {}, 5.0,
+        [("backend", process, object())], snapshot_request=request,
+    )
+
+    assert result["status"] == "PASS"
+    assert result["attempts"] == 3
+    assert result["stable_snapshot_count"] == 2
+
+
+def test_verified_drain_times_out_fail_closed_when_service_is_unavailable(monkeypatch):
+    source = {CLOUD: [{"header_ns": 1}], ODOM: [{"header_ns": 1}]}
+    clock = Mock(side_effect=[0.0, 0.0, 0.2, 0.2, 0.4, 0.4, 0.6])
+    request = Mock(
+        side_effect=runner.StreamAuditServiceUnavailableError(
+            "service call unavailable"
+        )
+    )
+    process = Mock()
+    process.poll.return_value = None
+    monkeypatch.setattr(runner.time, "monotonic", clock)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(runner.VerifiedDrainTimeoutError, match="service call unavailable"):
+        runner.wait_for_verified_drain(
+            source, CLOUD, ODOM, "/audit", {}, 0.5,
+            [("backend", process, object())], snapshot_request=request,
+        )
+
+
+def test_verified_drain_times_out_on_incomplete_native_counts(monkeypatch):
+    source = {
+        CLOUD: [{"header_ns": 1}, {"header_ns": 2}],
+        ODOM: [{"header_ns": 1}, {"header_ns": 2}],
+    }
+    now = -0.1
+
+    def monotonic():
+        nonlocal now
+        now += 0.1
+        return now
+
+    process = Mock()
+    process.poll.return_value = None
+    monkeypatch.setattr(runner.time, "monotonic", monotonic)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(runner.VerifiedDrainTimeoutError, match="last=pending"):
+        runner.wait_for_verified_drain(
+            source, CLOUD, ODOM, "/audit", {}, 0.5,
+            [("backend", process, object())],
+            snapshot_request=Mock(return_value=verified_snapshot_fields(count=1)),
+        )
+
+
+def test_verified_drain_fails_if_managed_backend_shutdowns(monkeypatch):
+    source = {CLOUD: [{"header_ns": 1}], ODOM: [{"header_ns": 1}]}
+    process = Mock()
+    process.poll.return_value = 7
+    monkeypatch.setattr(runner.time, "monotonic", Mock(side_effect=[0.0, 0.0]))
+
+    with pytest.raises(diagnostic.DiagnosticError, match="backend=7"):
+        runner.wait_for_verified_drain(
+            source, CLOUD, ODOM, "/audit", {}, 1.0,
+            [("backend", process, object())], snapshot_request=Mock(),
+        )
+
+
+def test_verified_drain_malformed_snapshot_is_error_not_timeout(monkeypatch):
+    source = {CLOUD: [{"header_ns": 1}], ODOM: [{"header_ns": 1}]}
+    process = Mock()
+    process.poll.return_value = None
+    monkeypatch.setattr(runner.time, "monotonic", Mock(side_effect=[0.0, 0.0]))
+    request = Mock(return_value={"report": "snapshot"})
+
+    with pytest.raises(diagnostic.DiagnosticError, match="missing field"):
+        runner.wait_for_verified_drain(
+            source, CLOUD, ODOM, "/audit", {}, 1.0,
+            [("backend", process, object())], snapshot_request=request,
+        )
+
+
+def test_service_call_timeout_kills_owned_subprocess(monkeypatch):
+    process = Mock(returncode=None)
+    process.communicate.side_effect = [
+        subprocess.TimeoutExpired(["ros2"], 0.25),
+        ("late output", None),
+    ]
+    popen = Mock(return_value=process)
+    monkeypatch.setattr(runner.subprocess, "Popen", popen)
+
+    with pytest.raises(diagnostic.DiagnosticError, match="timed out"):
+        runner.request_stream_audit_snapshot("/audit", {}, 0.25)
+
+    process.kill.assert_called_once_with()
+    assert process.communicate.call_args_list == [
+        call(timeout=0.25), call(timeout=0.25)
+    ]
+
+
 @pytest.mark.parametrize("value", ["0", "-1", "1.5", "nan", "inf"])
 def test_expected_source_count_requires_positive_integer(value):
     with pytest.raises(SystemExit):
@@ -717,6 +975,40 @@ def test_backend_audits_require_single_passing_lines_and_complete_accounting(tmp
     assert stream["status"] == "PASS"
     assert stream["accounting"]["status"] == "PASS"
     assert stream["accounting"]["reported_counts"]["pgo_publish_completed_count"] == 2
+
+
+def test_backend_final_audit_rechecks_verified_drain_exact_digests(tmp_path):
+    source = {
+        CLOUD: [{"header_ns": 1}, {"header_ns": 2}],
+        ODOM: [{"header_ns": 1}, {"header_ns": 2}],
+    }
+    expected = runner.expected_verified_drain_fields(source, CLOUD, ODOM)
+    fields = verified_snapshot_fields()
+    fields["report"] = "shutdown"
+    backend_log = tmp_path / "backend.log"
+    backend_log.write_text(
+        "SLC_DETERMINISM_AUDIT status=PASS\n" + stream_audit_line(fields) + "\n",
+        encoding="utf-8",
+    )
+
+    validation = runner.validate_backend_audits(
+        backend_log, source, CLOUD, ODOM, expected
+    )
+    assert validation["status"] == "PASS"
+    assert validation["stream_shutdown_audit"]["verified_drain_exactness"] == {
+        "status": "PASS"
+    }
+
+    fields["pgo_publish_completed_fnv64"] = "0x0000000000000000"
+    backend_log.write_text(
+        "SLC_DETERMINISM_AUDIT status=PASS\n" + stream_audit_line(fields) + "\n",
+        encoding="utf-8",
+    )
+    validation = runner.validate_backend_audits(
+        backend_log, source, CLOUD, ODOM, expected
+    )
+    assert validation["status"] == "FAIL"
+    assert validation["stream_shutdown_audit"]["verified_drain_exactness"]["status"] == "FAIL"
 
 
 @pytest.mark.parametrize(
