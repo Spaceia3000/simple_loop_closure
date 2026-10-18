@@ -129,10 +129,6 @@ if(BUILD_TESTING)
   ament_add_gtest(test_deterministic_gtsam_schedule test/test_deterministic_gtsam_schedule.cpp)
   target_include_directories(test_deterministic_gtsam_schedule PRIVATE include ${GTSAM_INCLUDE_DIRS})
   target_link_libraries(test_deterministic_gtsam_schedule gtsam)
-  ament_add_gtest(test_global_path test/test_global_path.cpp)
-  target_include_directories(test_global_path PRIVATE include ${GTSAM_INCLUDE_DIRS})
-  ament_target_dependencies(test_global_path "geometry_msgs" "nav_msgs" "std_msgs")
-  target_link_libraries(test_global_path gtsam)
   # This host has an incompatible globally installed third-party pytest plugin.
   # Disable plugin auto-loading so the package's self-contained tests remain
   # deterministic in both CMake's discovery probe and the test invocation.

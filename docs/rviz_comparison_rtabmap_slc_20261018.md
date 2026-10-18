@@ -9,10 +9,9 @@ sus perfiles, modos, timestamps, el sistema ROS ni la geometría del cierre.
 
 | Vista | Topic | Tipo / significado |
 |---|---|---|
-| GLOBAL trayectoria corregida amarilla | `/simple_loop_closure/global_path` | `nav_msgs/msg/Path`, poses GTSAM ordenadas, sparse por keyframe, `camera_init` |
 | GLOBAL odometría corregida magenta | `/pgo_odom` | `nav_msgs/msg/Odometry`; conserva la salida PGO original |
 | GLOBAL mapa gris | `/pgo_map_cloud` | `sensor_msgs/msg/PointCloud2` XYZI; intensidad, **no RGB** |
-| GLOBAL grafo optimizado magenta | `/simple_loop_closure/optimized_keyframes` | `visualization_msgs/msg/Marker` |
+| GLOBAL trayectoria de keyframes GTSAM optimizados | `/simple_loop_closure/optimized_keyframes` | `visualization_msgs/msg/Marker` |
 | GLOBAL cierres aceptados rojos | `/simple_loop_closure/loop_edges` | `visualization_msgs/msg/Marker` |
 | LOCAL trayectoria FAST cian | `/path` | `nav_msgs/msg/Path`, geometría local sin corrección de lazo |
 | LOCAL preview RGB acumulado | `/cloud_registered` | RGB8, `Decay Time: 10000`; geometría FAST sin corrección global |
@@ -20,6 +19,12 @@ sus perfiles, modos, timestamps, el sistema ROS ni la geometría del cierre.
 | LOCAL imagen cámara | `/rgb_img` | `sensor_msgs/msg/Image`; activada por defecto |
 | Diagnóstico métrico | `/cloud_registered_metric` | nube de entrada del backend; desactivada en RViz |
 | Keyframes originales opcionales | `/simple_loop_closure/original_keyframes` | marker cian; desactivado por defecto |
+
+No se crea ni publica un `nav_msgs/Path` global adicional. La trayectoria global
+que visualizamos es el marcador nativo de las poses optimizadas de GTSAM:
+`/simple_loop_closure/optimized_keyframes`. `/pgo_odom` es odometría
+propagada a partir de la última corrección optimizada y no constituye una
+reoptimización independiente de cada timestamp.
 
 No se usa ningún topic `/rtabmap/*`. La nube RGB de FAST sigue siendo local y
 no se presenta como mapa RGB corregido. SLC tampoco publica un TF corregido.

@@ -4,7 +4,6 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /GLOBAL corrected trajectory (yellow, sparse PGO keyframes)1
         - /LOCAL FAST RGB cumulative preview (not loop-corrected)1
       Splitter Ratio: 0.5
     Tree Height: 640
@@ -28,31 +27,6 @@ Visualization Manager:
       Plane Cell Count: 100
       Reference Frame: <Fixed Frame>
       Value: false
-    - Alpha: 1
-      Buffer Length: 1
-      Class: rviz_default_plugins/Path
-      Color: 255; 255; 0
-      Enabled: true
-      Head Diameter: 0.3
-      Head Length: 0.2
-      Length: 0.3
-      Line Style: Billboards
-      Line Width: 0.08
-      Name: GLOBAL corrected trajectory (yellow, sparse PGO keyframes)
-      Offset: {X: 0, Y: 0, Z: 0}
-      Pose Color: 255; 255; 0
-      Pose Style: None
-      Radius: 0.03
-      Shaft Diameter: 0.1
-      Shaft Length: 0.1
-      Topic:
-        Depth: 1
-        Durability Policy: Volatile
-        Filter size: 1
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /simple_loop_closure/global_path
-      Value: true
     - Class: rviz_default_plugins/Odometry
       Enabled: true
       Keep: 1000
@@ -121,7 +95,7 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/Marker
       Enabled: true
-      Name: GLOBAL optimized sparse graph marker (magenta)
+      Name: GLOBAL native optimized GTSAM keyframe trajectory (magenta)
       Topic:
         Depth: 10
         Durability Policy: Volatile

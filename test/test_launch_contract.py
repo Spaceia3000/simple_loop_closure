@@ -242,7 +242,7 @@ def test_ab_rviz_uses_only_native_graph_and_output_topics():
     assert "/aft_mapped_to_init" in config
     assert "/pgo_odom" in config
     assert "/pgo_map_cloud" in config
-    assert "/simple_loop_closure/global_path" in config
+    assert "/simple_loop_closure/global_path" not in config
     assert "/cloud_registered" in config
     assert "/rgb_img" in config
     assert "/rtabmap/" not in config

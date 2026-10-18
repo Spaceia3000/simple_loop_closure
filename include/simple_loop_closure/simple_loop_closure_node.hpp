@@ -5,7 +5,6 @@
 #include <rclcpp/rclcpp.hpp>
 #include <simple_loop_closure/deterministic_loop_schedule.hpp>
 #include <simple_loop_closure/fast_livo2_contract.hpp>
-#include <simple_loop_closure/global_path.hpp>
 #include <simple_loop_closure/ingress_telemetry.hpp>
 #include <simple_loop_closure/keyframe_gate.hpp>
 #include <simple_loop_closure/stream_audit.hpp>
@@ -16,7 +15,6 @@
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <nav_msgs/msg/odometry.hpp>
-#include <nav_msgs/msg/path.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <message_filters/subscriber.h>
@@ -83,7 +81,6 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_cloud_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_vis_pose_graph_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_pgo_odometry_;
-    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_global_path_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_original_keyframes_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_optimized_keyframes_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_loop_edges_;
@@ -127,7 +124,6 @@ private:
     std::deque<double> trajectory_dist_copied_;
     std::string odom_frame_id_;
     std_msgs::msg::Header latest_input_header_;
-    std_msgs::msg::Header latest_accepted_odom_header_;
     simple_loop_closure::FastLivo2Contract input_contract_;
 
     std::unique_ptr<simple_loop_closure::DeterministicLoopSchedule> loop_schedule_;
@@ -208,13 +204,13 @@ private:
 
     void publishMapCloud(const PointCloudType::Ptr &map_cloud);
 
-    void constructVisualizationOdometryEdges(const std::vector<gtsam::Pose3> &poses, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
+    void constructVisualizationOdometryEdges(const int &res_size, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
 
     void constructVisualizationOriginalEdges(const int &res_size, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
 
-    void constructVisualizationLoopEdges(const std::vector<gtsam::Pose3> &poses, const std::deque<LoopEdgeID> &loop_edges, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
+    void constructVisualizationLoopEdges(const int &res_size, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
 
-    void constructVisualizationNodes(const std::vector<gtsam::Pose3> &poses, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
+    void constructVisualizationNodes(const int &res_size, const std_msgs::msg::Header &header, visualization_msgs::msg::Marker &marker_msg);
 
     void publishVisualizationGraph();
 

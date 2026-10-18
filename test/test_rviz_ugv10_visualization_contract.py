@@ -24,8 +24,7 @@ def test_humble_global_local_topic_and_display_contract():
         for item in displays
         if item["Class"] == "rviz_default_plugins/Path"
     }
-    assert set(paths) == {"/simple_loop_closure/global_path", "/path"}
-    assert paths["/simple_loop_closure/global_path"]["Color"] == "255; 255; 0"
+    assert set(paths) == {"/path"}
     assert paths["/path"]["Color"] == "25; 255; 255"
     assert all(item["Enabled"] for item in paths.values())
 
