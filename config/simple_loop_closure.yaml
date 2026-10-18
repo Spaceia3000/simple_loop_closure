@@ -2,6 +2,9 @@ simple_loop_closure:
   ros__parameters:
     mapped_cloud: true
     time_stamp_tolerance: 0.01
+    # Experimental runtime-arrival buffer; not a certified optimum. The code
+    # default remains 50 and the operational memory-safety cap is 1024.
+    sync_queue_size: 128
     expected_fixed_frame: camera_init
     expected_body_frame: aft_mapped
     require_exact_timestamps: true

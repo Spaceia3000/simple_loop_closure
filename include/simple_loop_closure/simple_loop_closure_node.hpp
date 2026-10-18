@@ -17,12 +17,13 @@
 #include <visualization_msgs/msg/marker.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 #include <message_filters/subscriber.h>
-#include <message_filters/sync_policies/approximate_time.h>
+#include <message_filters/sync_policies/exact_time.h>
 #include <tf2_eigen/tf2_eigen.hpp>
 
 #include <Eigen/Dense>
 
 #include <algorithm>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -73,7 +74,7 @@ private:
     typedef std::vector<std::pair<long int, double>> NanoFlannSearchResult;
 #endif
     typedef std::pair<int, int> LoopEdgeID;
-    typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::PointCloud2, nav_msgs::msg::Odometry> SyncPolicy;
+    typedef message_filters::sync_policies::ExactTime<sensor_msgs::msg::PointCloud2, nav_msgs::msg::Odometry> SyncPolicy;
     typedef message_filters::Synchronizer<SyncPolicy> Sync;
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_cloud_;
@@ -137,6 +138,7 @@ private:
 
     bool mapped_cloud_;
     double time_stamp_tolerance_;
+    std::int64_t sync_queue_size_;
     double keyframe_dist_th_;
     double keyframe_angular_dist_th_;
     double loop_search_time_diff_th_;

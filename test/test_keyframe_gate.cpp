@@ -203,6 +203,22 @@ TEST(MathSafetyParameters, AcceptsZeroAndFiniteNonnegativeBoundaries)
       std::numeric_limits<double>::max(), std::numeric_limits<int>::max()));
 }
 
+TEST(SyncQueueSize, EnforcesOperationalMemorySafetyBoundaries)
+{
+  EXPECT_THROW(simple_loop_closure::validateSyncQueueSize(0), std::invalid_argument);
+  EXPECT_EQ(simple_loop_closure::validateSyncQueueSize(1), 1U);
+  EXPECT_EQ(simple_loop_closure::validateSyncQueueSize(50), 50U);
+  EXPECT_EQ(simple_loop_closure::validateSyncQueueSize(128), 128U);
+  EXPECT_EQ(
+      simple_loop_closure::validateSyncQueueSize(simple_loop_closure::kMaxSyncQueueSize),
+      1024U);
+  EXPECT_THROW(simple_loop_closure::validateSyncQueueSize(1025), std::invalid_argument);
+  EXPECT_THROW(
+      simple_loop_closure::validateSyncQueueSize(
+          std::numeric_limits<std::uint32_t>::max()),
+      std::invalid_argument);
+}
+
 TEST(KeyframeGate, ThresholdCrossingsRemainConsistentAcrossAuditedStages)
 {
   const Eigen::Affine3d previous = pose();

@@ -108,6 +108,12 @@ if(BUILD_TESTING)
   ament_add_gtest(test_fast_livo2_contract test/test_fast_livo2_contract.cpp)
   target_include_directories(test_fast_livo2_contract PRIVATE include)
   target_link_libraries(test_fast_livo2_contract Eigen3::Eigen)
+  ament_add_gtest(test_exact_time_sync test/test_exact_time_sync.cpp)
+  ament_target_dependencies(test_exact_time_sync
+    "message_filters"
+    "nav_msgs"
+    "sensor_msgs"
+  )
   ament_add_gtest(test_stream_audit test/test_stream_audit.cpp)
   target_include_directories(test_stream_audit PRIVATE include)
   ament_add_gtest(test_keyframe_gate test/test_keyframe_gate.cpp)

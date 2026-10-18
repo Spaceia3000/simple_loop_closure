@@ -41,6 +41,7 @@ void SimpleLoopClosureNode::initialize()
 
   this->declare_parameter<bool>("mapped_cloud", true);
   this->declare_parameter<double>("time_stamp_tolerance", 0.01);
+  this->declare_parameter<std::int64_t>("sync_queue_size", 50);
   this->declare_parameter<double>("keyframe_dist_th", 0.3);
   this->declare_parameter<double>("keyframe_angular_dist_th", 0.2);
   this->declare_parameter<double>("loop_search_time_diff_th", 30.0);
@@ -61,6 +62,7 @@ void SimpleLoopClosureNode::initialize()
 
   this->get_parameter("mapped_cloud", mapped_cloud_);
   this->get_parameter("time_stamp_tolerance", time_stamp_tolerance_);
+  this->get_parameter("sync_queue_size", sync_queue_size_);
   this->get_parameter("keyframe_dist_th", keyframe_dist_th_);
   this->get_parameter("keyframe_angular_dist_th", keyframe_angular_dist_th_);
   this->get_parameter("loop_search_time_diff_th", loop_search_time_diff_th_);
@@ -89,6 +91,8 @@ void SimpleLoopClosureNode::initialize()
   simple_loop_closure::validateMathSafetyParameters(
       keyframe_dist_th_, keyframe_angular_dist_th_, time_stamp_tolerance_,
       vis_map_cloud_frame_interval_);
+  const std::uint32_t validated_sync_queue_size =
+      simple_loop_closure::validateSyncQueueSize(sync_queue_size_);
   if (loop_search_frame_interval_ < 0)
     throw std::invalid_argument("loop_search_frame_interval must not be negative");
 
@@ -133,8 +137,8 @@ void SimpleLoopClosureNode::initialize()
         });
   }
 
-  synchronizer_ = std::make_shared<Sync>(SyncPolicy(50), sub_cloud_, sub_odom_);
-  synchronizer_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(time_stamp_tolerance_));
+  synchronizer_ = std::make_shared<Sync>(
+      SyncPolicy(validated_sync_queue_size), sub_cloud_, sub_odom_);
   synchronizer_->registerCallback(std::bind(&SimpleLoopClosureNode::pointCloudAndOdometryCallback, this,
                                             std::placeholders::_1, std::placeholders::_2));
 

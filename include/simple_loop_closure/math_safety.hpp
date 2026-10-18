@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 
@@ -17,6 +18,17 @@ inline void requireNonnegative(const char* name, const int value)
 {
   if (value < 0)
     throw std::invalid_argument(std::string(name) + " must be nonnegative");
+}
+
+// Operational memory-safety guard, not an empirically optimal matching depth.
+inline constexpr std::uint32_t kMaxSyncQueueSize = 1024U;
+
+inline std::uint32_t validateSyncQueueSize(const std::int64_t sync_queue_size)
+{
+  if (sync_queue_size <= 0 ||
+      static_cast<std::uint64_t>(sync_queue_size) > kMaxSyncQueueSize)
+    throw std::invalid_argument("sync_queue_size must be in the operational safety range [1, 1024]");
+  return static_cast<std::uint32_t>(sync_queue_size);
 }
 
 inline void validateMathSafetyParameters(

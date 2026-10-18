@@ -54,6 +54,26 @@ def test_default_parameters_are_fail_closed_for_metric_cloud():
     assert "require_exact_timestamps: true" in config
 
 
+def test_exact_time_policy_uses_validated_experimental_queue():
+    root = Path(__file__).parents[1]
+    config = (root / "config" / "simple_loop_closure.yaml").read_text()
+    header = (root / "include" / "simple_loop_closure" / "simple_loop_closure_node.hpp").read_text()
+    source = (root / "src" / "simple_loop_closure_node.cpp").read_text()
+
+    assert "sync_queue_size: 128" in config
+    assert "not a certified optimum" in config
+    assert "operational memory-safety cap is 1024" in config
+    assert 'declare_parameter<std::int64_t>("sync_queue_size", 50)' in source
+    assert 'get_parameter("sync_queue_size", sync_queue_size_)' in source
+    assert "validateSyncQueueSize(sync_queue_size_)" in source
+    assert source.index("validateSyncQueueSize(sync_queue_size_)") < source.index(
+        "SyncPolicy(validated_sync_queue_size)"
+    )
+    assert "sync_policies::ExactTime" in header
+    assert "sync_policies::ApproximateTime" not in header
+    assert "setMaxIntervalDuration" not in source
+
+
 def test_humble_manifest_declares_direct_adapter_dependencies():
     root = ET.parse(Path(__file__).parents[1] / "package.xml").getroot()
     dependencies = {
