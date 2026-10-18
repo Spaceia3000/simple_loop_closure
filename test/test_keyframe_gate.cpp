@@ -133,16 +133,19 @@ TEST(KeyframeCallbackStatic, PublishesPgoPerAcceptedPairBeforeCheapEarlyReturn)
   const std::string callback = source.substr(callback_begin, callback_end - callback_begin);
 
   const std::size_t validation = callback.find("if (!inputContractValid");
+  const std::size_t accepted_audit = callback.find("contract_accepted.observe");
   const std::size_t publish = callback.find("publishPoseGraphOptimizedOdometry");
   const std::size_t gate_return = callback.find("if (!decision.is_keyframe)");
   const std::size_t deserialize = callback.find("pcl::fromROSMsg");
   const std::size_t inverse_transform = callback.find("pcl::transformPointCloud");
   ASSERT_NE(validation, std::string::npos);
+  ASSERT_NE(accepted_audit, std::string::npos);
   ASSERT_NE(publish, std::string::npos);
   ASSERT_NE(gate_return, std::string::npos);
   ASSERT_NE(deserialize, std::string::npos);
   ASSERT_NE(inverse_transform, std::string::npos);
-  EXPECT_LT(validation, publish);
+  EXPECT_LT(validation, accepted_audit);
+  EXPECT_LT(accepted_audit, publish);
   EXPECT_LT(publish, gate_return);
   EXPECT_LT(gate_return, deserialize);
   EXPECT_LT(deserialize, inverse_transform);
@@ -171,19 +174,22 @@ TEST(KeyframeCallbackStatic, AuditsSelectedAndSkippedStampsAroundEarlyGate)
   const std::size_t skipped_audit = callback.find("keyframe_skipped.observe");
   const std::size_t gate_return = callback.find("if (!decision.is_keyframe)");
   const std::size_t deserialize = callback.find("pcl::fromROSMsg");
+  const std::size_t converted_audit = callback.find("pcl_converted.observe");
   const std::size_t inserted_audit = callback.find("keyframes_inserted.observe");
   ASSERT_NE(decision, std::string::npos);
   ASSERT_NE(selected_audit, std::string::npos);
   ASSERT_NE(skipped_audit, std::string::npos);
   ASSERT_NE(gate_return, std::string::npos);
   ASSERT_NE(deserialize, std::string::npos);
+  ASSERT_NE(converted_audit, std::string::npos);
   ASSERT_NE(inserted_audit, std::string::npos);
   EXPECT_LT(decision, selected_audit);
   EXPECT_LT(decision, skipped_audit);
   EXPECT_LT(selected_audit, gate_return);
   EXPECT_LT(skipped_audit, gate_return);
   EXPECT_LT(gate_return, deserialize);
-  EXPECT_LT(deserialize, inserted_audit);
+  EXPECT_LT(deserialize, converted_audit);
+  EXPECT_LT(converted_audit, inserted_audit);
 }
 
 }  // namespace

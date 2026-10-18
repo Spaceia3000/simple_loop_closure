@@ -42,6 +42,7 @@ TEST(StreamAudit, AcceptedRejectedAndKeyframePathsAreFullyAccounted)
   auto& audit = snapshot.audit;
 
   audit.sync_callbacks.observe(10, 10);
+  audit.contract_accepted.observe(10, 10);
   audit.pcl_converted.observe(10, 10);
   audit.pgo_publish_calls.observe(10);
   audit.keyframe_selected.observe(10);
@@ -51,7 +52,7 @@ TEST(StreamAudit, AcceptedRejectedAndKeyframePathsAreFullyAccounted)
   audit.contract_rejected.observe(20, 21);
 
   audit.sync_callbacks.observe(30, 30);
-  audit.pcl_converted.observe(30, 30);
+  audit.contract_accepted.observe(30, 30);
   audit.pgo_publish_calls.observe(30);
   audit.keyframe_skipped.observe(30);
 
@@ -60,12 +61,18 @@ TEST(StreamAudit, AcceptedRejectedAndKeyframePathsAreFullyAccounted)
 
   EXPECT_NE(line.find(" sync_callback_count=3 "), std::string::npos);
   EXPECT_NE(line.find(" contract_rejected_count=1 "), std::string::npos);
-  EXPECT_NE(line.find(" pcl_converted_count=2 "), std::string::npos);
+  EXPECT_NE(line.find(" contract_accepted_count=2 "), std::string::npos);
+  EXPECT_NE(line.find(" pcl_converted_count=1 "), std::string::npos);
   EXPECT_NE(line.find(" pgo_publish_call_count=2 "), std::string::npos);
   EXPECT_NE(line.find(" keyframe_inserted_count=1 "), std::string::npos);
   EXPECT_NE(line.find(" sync_accounting_ok=true"), std::string::npos);
-  EXPECT_NE(line.find(" converted_to_pgo_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" contract_accepted_to_pgo_count_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" contract_accepted_to_pgo_ordered_digest_ok=true"), std::string::npos);
   EXPECT_NE(line.find(" keyframe_decision_accounting_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_pcl_converted_count_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_pcl_converted_ordered_digest_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_inserted_count_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_inserted_ordered_digest_ok=true"), std::string::npos);
   EXPECT_NE(line.find(" selected_to_inserted_ok=true"), std::string::npos);
   EXPECT_NE(line.find(" inserted_to_storage_ok=true"), std::string::npos);
 }
@@ -74,10 +81,43 @@ TEST(StreamAudit, MissingTerminalStageCannotBeSilent)
 {
   simple_loop_closure::StreamAuditSnapshot snapshot;
   snapshot.audit.sync_callbacks.observe(100, 100);
+  snapshot.audit.contract_accepted.observe(100, 100);
+  snapshot.audit.keyframe_selected.observe(100);
 
   const std::string line = simple_loop_closure::formatStreamAuditReport(snapshot, "shutdown");
-  EXPECT_NE(line.find(" sync_accounted=0"), std::string::npos);
-  EXPECT_NE(line.find(" sync_accounting_ok=false"), std::string::npos);
+  EXPECT_NE(line.find(" sync_accounted=1"), std::string::npos);
+  EXPECT_NE(line.find(" sync_accounting_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" contract_accepted_to_pgo_count_ok=false"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_pcl_converted_count_ok=false"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_inserted_count_ok=false"), std::string::npos);
+}
+
+TEST(StreamAudit, EqualCountsWithReorderedStagesFailOrderedDigestChecks)
+{
+  simple_loop_closure::StreamAuditSnapshot snapshot;
+  auto& audit = snapshot.audit;
+
+  for (const std::int64_t stamp : {100LL, 200LL})
+  {
+    audit.sync_callbacks.observe(stamp, stamp);
+    audit.contract_accepted.observe(stamp, stamp);
+    audit.keyframe_selected.observe(stamp);
+  }
+  for (const std::int64_t stamp : {200LL, 100LL})
+  {
+    audit.pgo_publish_calls.observe(stamp);
+    audit.pcl_converted.observe(stamp, stamp);
+    audit.keyframes_inserted.observe(stamp);
+  }
+  snapshot.keyframes_stored = 2;
+
+  const std::string line = simple_loop_closure::formatStreamAuditReport(snapshot, "snapshot");
+  EXPECT_NE(line.find(" contract_accepted_to_pgo_count_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" contract_accepted_to_pgo_ordered_digest_ok=false"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_pcl_converted_count_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_pcl_converted_ordered_digest_ok=false"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_inserted_count_ok=true"), std::string::npos);
+  EXPECT_NE(line.find(" selected_to_inserted_ordered_digest_ok=false"), std::string::npos);
 }
 
 TEST(StreamAudit, DepthOnePgoLossIsVisibleAgainstRecorderCountAndDigest)
@@ -115,7 +155,7 @@ TEST(StreamAudit, ShutdownReportLabelsExternalRecorderComparison)
   EXPECT_NE(snapshot_line, shutdown_line);
   EXPECT_EQ(shutdown_line.find('\n'), std::string::npos);
   EXPECT_EQ(shutdown_line.find('\r'), std::string::npos);
-  EXPECT_EQ(shutdown_line.rfind("SC_SIMPLE_STREAM_AUDIT version=4 report=shutdown", 0), 0U);
+  EXPECT_EQ(shutdown_line.rfind("SC_SIMPLE_STREAM_AUDIT version=5 report=shutdown", 0), 0U);
   EXPECT_NE(shutdown_line.find(" pgo_recorder=external_compare_required"), std::string::npos);
   EXPECT_NE(shutdown_line.find(" pgo_publisher_qos=reliable_keep_last_1"), std::string::npos);
 }

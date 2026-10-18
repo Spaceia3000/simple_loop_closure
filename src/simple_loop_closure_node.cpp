@@ -415,14 +415,14 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     return;
   }
 
-  Affine3dPtr affine_curr(new Eigen::Affine3d);
-  tf2::fromMsg(odom_msg->pose.pose, *affine_curr);
-
   if (stream_audit_context_)
   {
     std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
-    stream_audit_context_->audit.pcl_converted.observe(cloud_stamp_ns, odom_stamp_ns);
+    stream_audit_context_->audit.contract_accepted.observe(cloud_stamp_ns, odom_stamp_ns);
   }
+
+  Affine3dPtr affine_curr(new Eigen::Affine3d);
+  tf2::fromMsg(odom_msg->pose.pose, *affine_curr);
 
   publishPoseGraphOptimizedOdometry(*affine_curr, *odom_msg);
 
@@ -448,6 +448,11 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
 
   PointCloudType::Ptr cloud_curr(new PointCloudType);
   pcl::fromROSMsg(*cloud_msg, *cloud_curr);
+  if (stream_audit_context_)
+  {
+    std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
+    stream_audit_context_->audit.pcl_converted.observe(cloud_stamp_ns, odom_stamp_ns);
+  }
 
   if (mapped_cloud_)
   {

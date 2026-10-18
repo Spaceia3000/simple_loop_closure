@@ -86,6 +86,20 @@ def test_pgo_depth_one_publish_calls_are_audited_before_publish():
     assert source.index(audit_call) < source.index(publish_call)
 
 
+def test_stream_audit_stage_taps_match_true_processing_boundaries():
+    source = (Path(__file__).parents[1] / "src" / "simple_loop_closure_node.cpp").read_text()
+    callback = source[source.index("void SimpleLoopClosureNode::pointCloudAndOdometryCallback") :]
+
+    contract_check = callback.index("if (!inputContractValid")
+    accepted = callback.index("audit.contract_accepted.observe")
+    pgo = callback.index("publishPoseGraphOptimizedOdometry")
+    keyframe_return = callback.index("if (!decision.is_keyframe)")
+    deserialize = callback.index("pcl::fromROSMsg")
+    converted = callback.index("audit.pcl_converted.observe")
+
+    assert contract_check < accepted < pgo < keyframe_return < deserialize < converted
+
+
 def test_generated_python_and_native_build_artifacts_are_ignored():
     ignore_rules = (Path(__file__).parents[1] / ".gitignore").read_text().splitlines()
 
