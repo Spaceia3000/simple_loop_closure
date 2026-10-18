@@ -336,13 +336,24 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     return;
   }
 
-  PointCloudType::Ptr cloud_curr(new PointCloudType);
-  pcl::fromROSMsg(*cloud_msg, *cloud_curr);
-
   Affine3dPtr affine_curr(new Eigen::Affine3d);
   tf2::fromMsg(odom_msg->pose.pose, *affine_curr);
 
   publishPoseGraphOptimizedOdometry(*affine_curr, *odom_msg);
+
+  simple_loop_closure::KeyframeDecision decision;
+  {
+    MtxLockGuard guard(mtx_buf_);
+    const Eigen::Affine3d* previous_pose =
+        keyframes_odom_.empty() ? nullptr : keyframes_odom_.back().get();
+    decision = simple_loop_closure::decideKeyframe(
+        previous_pose, *affine_curr, keyframe_dist_th_, keyframe_angular_dist_th_);
+  }
+  if (!decision.is_keyframe)
+    return;
+
+  PointCloudType::Ptr cloud_curr(new PointCloudType);
+  pcl::fromROSMsg(*cloud_msg, *cloud_curr);
 
   if (mapped_cloud_)
   {
@@ -355,22 +366,11 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
 
   {
     MtxLockGuard guard(mtx_buf_);
-    if (!keyframes_odom_.empty())
-    {
-      const double distance =
-          (keyframes_odom_.back()->translation() - affine_curr->translation()).norm();
-      const Eigen::Quaterniond quat_prev(keyframes_odom_.back()->rotation());
-      const Eigen::Quaterniond quat_curr(affine_curr->rotation());
-      const double angle = quat_prev.angularDistance(quat_curr);
-      if (distance < keyframe_dist_th_ && angle < keyframe_angular_dist_th_)
-        return;
-      trajectory_dist_.push_back(trajectory_dist_.back() + distance);
-    }
-    else
-    {
+    const bool first_keyframe = keyframes_odom_.empty();
+    if (first_keyframe)
       odom_frame_id_ = odom_msg->header.frame_id;
-      trajectory_dist_.push_back(0);
-    }
+    trajectory_dist_.push_back(simple_loop_closure::nextTrajectoryDistance(
+        first_keyframe, first_keyframe ? 0.0 : trajectory_dist_.back(), decision));
 
     keyframes_cloud_.push_back(cloud_curr);
     keyframes_odom_.push_back(affine_curr);

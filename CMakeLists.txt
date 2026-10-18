@@ -106,6 +106,12 @@ if(BUILD_TESTING)
   ament_add_gtest(test_fast_livo2_contract test/test_fast_livo2_contract.cpp)
   target_include_directories(test_fast_livo2_contract PRIVATE include)
   target_link_libraries(test_fast_livo2_contract Eigen3::Eigen)
+  ament_add_gtest(test_keyframe_gate test/test_keyframe_gate.cpp)
+  target_include_directories(test_keyframe_gate PRIVATE include)
+  target_compile_definitions(test_keyframe_gate PRIVATE
+    SLC_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+  )
+  target_link_libraries(test_keyframe_gate Eigen3::Eigen)
   ament_add_gtest(test_deterministic_loop_schedule test/test_deterministic_loop_schedule.cpp)
   target_include_directories(test_deterministic_loop_schedule PRIVATE include)
   ament_add_gtest(test_deterministic_gtsam_schedule test/test_deterministic_gtsam_schedule.cpp)

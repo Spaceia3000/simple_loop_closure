@@ -5,6 +5,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <simple_loop_closure/deterministic_loop_schedule.hpp>
 #include <simple_loop_closure/fast_livo2_contract.hpp>
+#include <simple_loop_closure/keyframe_gate.hpp>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
