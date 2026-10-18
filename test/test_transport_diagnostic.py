@@ -789,6 +789,7 @@ def test_recorder_qos_yaml_parser_is_opt_in_and_preserves_argument():
     ]
 
     assert runner.parser().parse_args(base).recorder_qos_yaml is None
+    assert runner.parser().parse_args(base).witness_raw_cdr_stamps is False
     args = runner.parser().parse_args(
         base + ["--recorder-qos-yaml", "relative/recorder-qos.yaml"]
     )
@@ -816,7 +817,7 @@ def test_run_rejects_missing_recorder_qos_yaml_before_bag_or_output(
     assert not output.exists()
 
 
-def test_recorder_qos_override_is_owned_only_by_recorder_and_manifest(
+def test_qos_and_raw_witness_arguments_are_forwarded_only_to_their_owners(
     tmp_path, monkeypatch
 ):
     class FakeProcess:
@@ -879,6 +880,7 @@ def test_recorder_qos_override_is_owned_only_by_recorder_and_manifest(
             "--domain-id", "166", "--subscriber-qos-profile", "reliable",
             "--cloud-topic", CLOUD, "--odom-topic", ODOM, "--pgo-topic", PGO,
             "--recorder-qos-yaml", str(qos_argument), "--startup-sec", "0.01",
+            "--witness-raw-cdr-stamps",
             "--endpoint-snapshot-delay-sec", "0.01", "--drain-sec", "0.01",
             "--shutdown-timeout-sec", "0.01",
         ]
@@ -891,6 +893,7 @@ def test_recorder_qos_override_is_owned_only_by_recorder_and_manifest(
     expected_suffix = ["--qos-profile-overrides-path", str(qos_argument)]
     assert commands["recorder"][-2:] == expected_suffix
     assert manifest["recorder_qos"] == {"yaml": str(qos_argument)}
+    assert manifest["witness_raw_cdr_stamps"] is True
     assert manifest["source_bag"] == str((tmp_path / "source").resolve())
     assert commands["playback"] == [
         "ros2", "bag", "play", str((tmp_path / "source").resolve()), "--rate", "1.0"
@@ -898,6 +901,11 @@ def test_recorder_qos_override_is_owned_only_by_recorder_and_manifest(
     assert all(
         "--qos-profile-overrides-path" not in commands[name]
         for name in ("witness", "backend", "playback")
+    )
+    assert commands["witness"][-1] == "--raw-cdr-stamps"
+    assert all(
+        "--raw-cdr-stamps" not in commands[name]
+        for name in ("recorder", "backend", "playback")
     )
     assert started == [
         commands["witness"], commands["recorder"], commands["backend"], commands["playback"]

@@ -104,6 +104,11 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--output-dir", type=Path, required=True)
     run.add_argument("--domain-id", type=_domain_id, required=True)
     run.add_argument("--subscriber-qos-profile", choices=("sensor-data", "reliable"), required=True)
+    run.add_argument(
+        "--witness-raw-cdr-stamps",
+        action="store_true",
+        help="make only the Python witness extract Header stamps from raw CDR",
+    )
     run.add_argument("--publisher-qos-yaml", type=Path)
     run.add_argument(
         "--recorder-qos-yaml",
@@ -1020,6 +1025,8 @@ def run_diagnostic(args: argparse.Namespace) -> int:
         "--pgo-topic", args.pgo_topic,
         "--qos-profile", args.subscriber_qos_profile,
     ]
+    if args.witness_raw_cdr_stamps:
+        witness.append("--raw-cdr-stamps")
     recorder = [
         "ros2", "bag", "record", "--storage", "sqlite3", "--output", str(recorded_bag),
         args.cloud_topic, args.odom_topic, args.pgo_topic,
@@ -1043,6 +1050,7 @@ def run_diagnostic(args: argparse.Namespace) -> int:
         "output_dir": str(output_dir),
         "topics": {"cloud": args.cloud_topic, "odometry": args.odom_topic, "pgo_odometry": args.pgo_topic},
         "subscriber_qos_profile": args.subscriber_qos_profile,
+        "witness_raw_cdr_stamps": args.witness_raw_cdr_stamps,
         "subscriber_qos_definitions": {
             "sensor-data": "keep_last(10), best_effort, volatile",
             "reliable": "keep_last(100), reliable, volatile",
