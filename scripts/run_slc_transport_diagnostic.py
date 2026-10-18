@@ -33,6 +33,7 @@ from transport_diagnostic_common import (
 DEFAULT_CLOUD_TOPIC = "/cloud_registered_metric"
 DEFAULT_ODOM_TOPIC = "/aft_mapped_to_init"
 DEFAULT_PGO_TOPIC = "/pgo_odom"
+DIAGNOSTIC_SCHEMA_VERSION = "slc-transport-diagnostic-v3"
 
 
 class PlaybackTimeoutError(DiagnosticError):
@@ -51,6 +52,16 @@ def _positive(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0.0:
         raise argparse.ArgumentTypeError("must be finite and greater than zero")
+    return parsed
+
+
+def _positive_integer(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a positive integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
     return parsed
 
 
@@ -99,6 +110,31 @@ def parser() -> argparse.ArgumentParser:
         help=(
             "require one passing native determinism audit and one passing shutdown "
             "stream audit with complete source/sync/pgo accounting"
+        ),
+    )
+    run.add_argument(
+        "--require-external-stamp-integrity",
+        action="store_true",
+        help=(
+            "require exact ordered source-to-witness, source-to-recorder, and "
+            "PGO witness-to-recorder stamp multisets (does not assert the "
+            "project-specific full synchronized-source contract)"
+        ),
+    )
+    run.add_argument(
+        "--certify-all",
+        action="store_true",
+        help=(
+            "require native audits, external integrity, and the complete "
+            "per-bag synchronized source-to-PGO contract"
+        ),
+    )
+    run.add_argument(
+        "--expected-source-count",
+        type=_positive_integer,
+        help=(
+            "optional independent expected count for each source input topic; "
+            "the default derives the count from the source SQLite inventory"
         ),
     )
 
@@ -155,6 +191,43 @@ def bag_content_duration_seconds(bag: Path) -> float | None:
     return duration if math.isfinite(duration) and duration >= 0.0 else None
 
 
+def bag_metadata_topic_counts(
+    bag: Path, topics: Sequence[str]
+) -> dict[str, int] | None:
+    """Return verified per-topic rosbag metadata counts when available."""
+    try:
+        import yaml
+    except ImportError:
+        return None
+    try:
+        metadata = yaml.safe_load((bag / "metadata.yaml").read_text(encoding="utf-8"))
+        entries = metadata["rosbag2_bagfile_information"]["topics_with_message_count"]
+    except (KeyError, TypeError, OSError, yaml.YAMLError):
+        return None
+    if not isinstance(entries, list):
+        return None
+    available: dict[str, int] = {}
+    for entry in entries:
+        try:
+            name = entry["topic_metadata"]["name"]
+            count = entry["message_count"]
+        except (KeyError, TypeError):
+            return None
+        if (
+            not isinstance(name, str)
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+            or name in available
+        ):
+            return None
+        available[name] = count
+    wanted = tuple(dict.fromkeys(topics))
+    if any(topic not in available for topic in wanted):
+        return None
+    return {topic: available[topic] for topic in wanted}
+
+
 def audit_artifacts(
     source_bag: Path,
     recorded_bag: Path,
@@ -164,6 +237,8 @@ def audit_artifacts(
     odom_topic: str,
     pgo_topic: str,
     run_evidence: dict[str, object] | None = None,
+    certify_full_source: bool = False,
+    expected_source_count: int | None = None,
 ) -> dict[str, object]:
     source = inspect_bag(source_bag, (cloud_topic, odom_topic))
     recorded = inspect_bag(recorded_bag, (cloud_topic, odom_topic, pgo_topic))
@@ -174,6 +249,11 @@ def audit_artifacts(
         cloud_topic,
         odom_topic,
         pgo_topic,
+        certify_full_source=certify_full_source,
+        expected_source_count=expected_source_count,
+        source_metadata_topic_counts=bag_metadata_topic_counts(
+            source_bag, (cloud_topic, odom_topic)
+        ),
     )
     if run_evidence is not None:
         report["run_evidence"] = run_evidence
@@ -282,7 +362,10 @@ def wait_for_playback(
             returncode = process.wait(timeout=remaining)
     except subprocess.TimeoutExpired as exc:
         elapsed = time.monotonic() - started
-        assert timeout is not None
+        if timeout is None:
+            raise DiagnosticError(
+                "playback wait unexpectedly timed out without a configured timeout"
+            ) from exc
         raise PlaybackTimeoutError(timeout, elapsed) from exc
     return returncode, time.monotonic() - started
 
@@ -295,6 +378,76 @@ def start_logged(command: Sequence[str], log: Path, env: dict[str, str]):
         stream.close()
         raise
     return process, stream
+
+
+def diagnostic_git_commit() -> str | None:
+    """Return the implementation commit without making manifest creation fragile."""
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "HEAD"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5.0,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    commit = completed.stdout.strip()
+    return commit if completed.returncode == 0 and commit else None
+
+
+def certification_requirements(args: argparse.Namespace) -> tuple[bool, bool]:
+    """Resolve the two opt-in gates, including the unified certification flag."""
+    return (
+        bool(args.require_backend_audits or args.certify_all),
+        bool(args.require_external_stamp_integrity or args.certify_all),
+    )
+
+
+def validate_source_inventory(
+    source_inventory: Mapping[str, list[dict[str, int]]],
+    cloud_topic: str,
+    odom_topic: str,
+    *,
+    certify_all: bool,
+    expected_source_count: int | None,
+    metadata_topic_counts: Mapping[str, int] | None,
+) -> None:
+    """Fail before replay when source evidence cannot support the requested gate."""
+    cloud = source_inventory.get(cloud_topic, [])
+    odom = source_inventory.get(odom_topic, [])
+    errors: list[str] = []
+    if expected_source_count is not None:
+        for topic, records in ((cloud_topic, cloud), (odom_topic, odom)):
+            if len(records) != expected_source_count:
+                errors.append(
+                    f"{topic} SQLite count {len(records)} does not match "
+                    f"--expected-source-count {expected_source_count}"
+                )
+    if certify_all:
+        for topic, records in ((cloud_topic, cloud), (odom_topic, odom)):
+            if not records:
+                errors.append(f"{topic} source SQLite inventory is empty")
+            stamps = [int(record["header_ns"]) for record in records]
+            if len(set(stamps)) != len(stamps):
+                errors.append(f"{topic} source SQLite header stamps are not unique")
+            if metadata_topic_counts is not None:
+                metadata_count = metadata_topic_counts.get(topic)
+                if metadata_count != len(records):
+                    errors.append(
+                        f"{topic} metadata count {metadata_count} does not match "
+                        f"SQLite count {len(records)}"
+                    )
+        cloud_stamps = [int(record["header_ns"]) for record in cloud]
+        odom_stamps = [int(record["header_ns"]) for record in odom]
+        if cloud_stamps != odom_stamps:
+            errors.append(
+                "source cloud and odometry SQLite header stamps are not exactly "
+                "identical in order and multiplicity"
+            )
+    if errors:
+        raise DiagnosticError("source inventory validation failed: " + "; ".join(errors))
 
 
 def _parse_audit_payload(line: str, marker: str) -> dict[str, str]:
@@ -497,7 +650,19 @@ def run_diagnostic(args: argparse.Namespace) -> int:
         )
 
     topics = (args.cloud_topic, args.odom_topic, args.pgo_topic)
+    require_backend_audits, require_external_stamp_integrity = (
+        certification_requirements(args)
+    )
     source_inventory = inspect_bag(source_bag, topics[:2])
+    source_metadata_counts = bag_metadata_topic_counts(source_bag, topics[:2])
+    validate_source_inventory(
+        source_inventory,
+        args.cloud_topic,
+        args.odom_topic,
+        certify_all=args.certify_all,
+        expected_source_count=args.expected_source_count,
+        metadata_topic_counts=source_metadata_counts,
+    )
     bag_duration = bag_content_duration_seconds(source_bag)
     output_dir.mkdir(parents=True, exist_ok=False)
     write_json(output_dir / "source_sqlite_stamps.json", source_inventory)
@@ -536,6 +701,10 @@ def run_diagnostic(args: argparse.Namespace) -> int:
     env = os.environ.copy()
     env["ROS_DOMAIN_ID"] = str(args.domain_id)
     manifest = {
+        "diagnostic": {
+            "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
+            "git_commit": diagnostic_git_commit(),
+        },
         "ros_domain_id": args.domain_id,
         "source_bag": str(source_bag),
         "bag_content_duration_seconds": bag_duration,
@@ -556,7 +725,27 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             "fail_closed": True,
             "aborted_replay_pass_eligible": False,
             "partial_audit_requires_readable_artifacts": True,
-            "require_backend_audits": args.require_backend_audits,
+            "require_backend_audits": require_backend_audits,
+            "require_external_stamp_integrity": require_external_stamp_integrity,
+            "certify_all": args.certify_all,
+            "full_source_contract": {
+                "requested": args.certify_all,
+                "enforced_only_for_complete_replay": True,
+                "derived_source_count": (
+                    len(source_inventory[args.cloud_topic])
+                    if args.certify_all
+                    else None
+                ),
+                "source_sqlite_topic_counts": {
+                    topic: len(source_inventory.get(topic, [])) for topic in topics[:2]
+                },
+                "source_metadata_topic_counts": source_metadata_counts,
+                "expected_source_count": args.expected_source_count,
+                "precondition": (
+                    "the original cloud and odometry SQLite streams are nonempty, "
+                    "one-to-one, unique, and have exactly equal ordered header stamps"
+                ),
+            },
         },
         "timings_seconds": {
             "playback_rate": 1.0,
@@ -639,7 +828,7 @@ def run_diagnostic(args: argparse.Namespace) -> int:
         if cleanup_errors:
             status["cleanup_errors"] = cleanup_errors
 
-    if args.require_backend_audits:
+    if require_backend_audits:
         try:
             backend_validation = validate_backend_audits(
                 output_dir / "backend.log",
@@ -686,14 +875,41 @@ def run_diagnostic(args: argparse.Namespace) -> int:
     run_evidence = {
         "audit_scope": "complete" if run_complete_for_audit else "partial",
         "replay_completed": bool(status["playback"]["completed"]),
-        "pass_eligible": run_complete_for_audit,
+        # A requested external gate starts in the safe state.  Only a complete,
+        # readable PASS can promote the persisted report to pass-eligible.
+        "pass_eligible": (
+            run_complete_for_audit and not require_external_stamp_integrity
+        ),
     }
     try:
+        audit_options: dict[str, object] = {"run_evidence": run_evidence}
+        if args.certify_all and bool(status["playback"]["completed"]):
+            audit_options["certify_full_source"] = True
+            audit_options["expected_source_count"] = args.expected_source_count
         report = audit_artifacts(
             source_bag, recorded_bag, witness_path, output_dir / "loss_report.json",
             args.cloud_topic, args.odom_topic, args.pgo_topic,
-            run_evidence=run_evidence,
+            **audit_options,
         )
+        external_validation = report.get("external_stamp_integrity")
+        if require_external_stamp_integrity:
+            if not isinstance(external_validation, dict):
+                raise DiagnosticError(
+                    "external stamp integrity report is missing or malformed"
+                )
+            status["external_stamp_integrity"] = external_validation
+            if external_validation.get("status") == "PASS":
+                run_evidence["pass_eligible"] = run_complete_for_audit
+                report["run_evidence"] = run_evidence
+                write_json(output_dir / "loss_report.json", report)
+            else:
+                discrepancies = external_validation.get("discrepancies", [])
+                if primary_error is None:
+                    primary_error = DiagnosticError(
+                        "required external stamp integrity did not pass: "
+                        + json.dumps(discrepancies, sort_keys=True)
+                    )
+                    primary_traceback = primary_error.__traceback__
         status["audit"] = {
             "completed": True,
             "scope": run_evidence["audit_scope"],
