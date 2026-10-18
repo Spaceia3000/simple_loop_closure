@@ -1,0 +1,166 @@
+#pragma once
+
+#include <cstdint>
+#include <iomanip>
+#include <sstream>
+#include <string>
+
+namespace simple_loop_closure
+{
+
+constexpr std::uint64_t kFnv1a64OffsetBasis = 14695981039346656037ULL;
+constexpr std::uint64_t kFnv1a64Prime = 1099511628211ULL;
+
+inline std::uint64_t appendStampFnv1a64(std::uint64_t digest, const std::int64_t stamp_ns)
+{
+  std::uint64_t value = static_cast<std::uint64_t>(stamp_ns);
+  for (unsigned int byte = 0; byte < 8; ++byte)
+  {
+    digest ^= value & 0xffU;
+    digest *= kFnv1a64Prime;
+    value >>= 8;
+  }
+  return digest;
+}
+
+// Exact repeated stamps in a monotonic stream are adjacent, so this remains
+// constant-space while still exposing the expected sensor-stream failures.
+struct TimestampSequenceAudit
+{
+  void observe(const std::int64_t stamp_ns)
+  {
+    digest = appendStampFnv1a64(digest, stamp_ns);
+    if (count == 0)
+      first_stamp_ns = stamp_ns;
+    else
+    {
+      adjacent_duplicates += stamp_ns == last_stamp_ns;
+      reversals += stamp_ns < last_stamp_ns;
+    }
+    last_stamp_ns = stamp_ns;
+    ++count;
+  }
+
+  bool sameCountAndDigest(const TimestampSequenceAudit& other) const
+  {
+    return count == other.count && digest == other.digest;
+  }
+
+  std::uint64_t count{0};
+  std::uint64_t digest{kFnv1a64OffsetBasis};
+  std::uint64_t adjacent_duplicates{0};
+  std::uint64_t reversals{0};
+  std::int64_t first_stamp_ns{0};
+  std::int64_t last_stamp_ns{0};
+};
+
+struct PairedTimestampSequenceAudit
+{
+  void observe(const std::int64_t cloud_stamp_ns, const std::int64_t odom_stamp_ns)
+  {
+    cloud.observe(cloud_stamp_ns);
+    odom.observe(odom_stamp_ns);
+    ordered_pair_digest = appendStampFnv1a64(ordered_pair_digest, cloud_stamp_ns);
+    ordered_pair_digest = appendStampFnv1a64(ordered_pair_digest, odom_stamp_ns);
+    mismatches += cloud_stamp_ns != odom_stamp_ns;
+  }
+
+  std::uint64_t count() const
+  {
+    return cloud.count;
+  }
+
+  TimestampSequenceAudit cloud;
+  TimestampSequenceAudit odom;
+  std::uint64_t ordered_pair_digest{kFnv1a64OffsetBasis};
+  std::uint64_t mismatches{0};
+};
+
+struct StreamAudit
+{
+  TimestampSequenceAudit cloud_ingress;
+  TimestampSequenceAudit odom_ingress;
+  PairedTimestampSequenceAudit sync_callbacks;
+  PairedTimestampSequenceAudit contract_rejected;
+  PairedTimestampSequenceAudit pcl_converted;
+  TimestampSequenceAudit pgo_publish_calls;
+  TimestampSequenceAudit keyframe_selected;
+  TimestampSequenceAudit keyframe_skipped;
+  TimestampSequenceAudit keyframes_inserted;
+};
+
+struct StreamAuditSnapshot
+{
+  StreamAudit audit;
+  std::uint64_t keyframes_stored{0};
+  std::uint64_t loop_factors{0};
+};
+
+inline void appendTimestampSequence(
+    std::ostringstream& out, const char* name, const TimestampSequenceAudit& sequence)
+{
+  out << ' ' << name << "_count=" << sequence.count
+      << ' ' << name << "_fnv64=0x" << std::hex << std::setw(16) << std::setfill('0')
+      << sequence.digest << std::dec << std::setfill(' ')
+      << ' ' << name << "_adjacent_duplicates=" << sequence.adjacent_duplicates
+      << ' ' << name << "_reversals=" << sequence.reversals
+      << ' ' << name << "_first_ns=" << sequence.first_stamp_ns
+      << ' ' << name << "_last_ns=" << sequence.last_stamp_ns;
+}
+
+inline void appendPairSequence(
+    std::ostringstream& out, const char* name, const PairedTimestampSequenceAudit& sequence)
+{
+  out << ' ' << name << "_count=" << sequence.count()
+      << ' ' << name << "_pair_fnv64=0x" << std::hex << std::setw(16) << std::setfill('0')
+      << sequence.ordered_pair_digest << std::dec << std::setfill(' ')
+      << ' ' << name << "_mismatches=" << sequence.mismatches;
+  const std::string cloud_name = std::string(name) + "_cloud";
+  const std::string odom_name = std::string(name) + "_odom";
+  appendTimestampSequence(out, cloud_name.c_str(), sequence.cloud);
+  appendTimestampSequence(out, odom_name.c_str(), sequence.odom);
+}
+
+inline std::string formatStreamAuditReport(
+    const StreamAuditSnapshot& snapshot, const char* report_kind)
+{
+  const StreamAudit& audit = snapshot.audit;
+  const std::uint64_t sync_accounted =
+      audit.contract_rejected.count() + audit.pcl_converted.count();
+  const std::uint64_t keyframe_decisions =
+      audit.keyframe_selected.count + audit.keyframe_skipped.count;
+  const bool converted_to_pgo_ok =
+      audit.pcl_converted.odom.sameCountAndDigest(audit.pgo_publish_calls);
+  const bool selected_to_inserted_ok =
+      audit.keyframe_selected.sameCountAndDigest(audit.keyframes_inserted);
+
+  std::ostringstream out;
+  out << "SC_SIMPLE_STREAM_AUDIT version=4 report=" << report_kind
+      << " external_source_count=not_observed"
+      << " pgo_recorder=external_compare_required"
+      << " pgo_publisher_qos=reliable_keep_last_1";
+  appendTimestampSequence(out, "cloud_ingress", audit.cloud_ingress);
+  appendTimestampSequence(out, "odom_ingress", audit.odom_ingress);
+  appendPairSequence(out, "sync_callback", audit.sync_callbacks);
+  appendPairSequence(out, "contract_rejected", audit.contract_rejected);
+  appendPairSequence(out, "pcl_converted", audit.pcl_converted);
+  appendTimestampSequence(out, "pgo_publish_call", audit.pgo_publish_calls);
+  appendTimestampSequence(out, "keyframe_selected", audit.keyframe_selected);
+  appendTimestampSequence(out, "keyframe_skipped", audit.keyframe_skipped);
+  appendTimestampSequence(out, "keyframe_inserted", audit.keyframes_inserted);
+  out << " sync_accounted=" << sync_accounted
+      << " sync_accounting_ok="
+      << (audit.sync_callbacks.count() == sync_accounted ? "true" : "false")
+      << " converted_to_pgo_ok=" << (converted_to_pgo_ok ? "true" : "false")
+      << " keyframe_decisions=" << keyframe_decisions
+      << " keyframe_decision_accounting_ok="
+      << (audit.pgo_publish_calls.count == keyframe_decisions ? "true" : "false")
+      << " selected_to_inserted_ok=" << (selected_to_inserted_ok ? "true" : "false")
+      << " inserted_to_storage_ok="
+      << (audit.keyframes_inserted.count == snapshot.keyframes_stored ? "true" : "false")
+      << " keyframes_stored=" << snapshot.keyframes_stored
+      << " loop_factors=" << snapshot.loop_factors;
+  return out.str();
+}
+
+}  // namespace simple_loop_closure

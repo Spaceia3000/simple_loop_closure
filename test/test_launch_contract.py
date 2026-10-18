@@ -62,7 +62,28 @@ def test_humble_manifest_declares_direct_adapter_dependencies():
         for element in root.findall(tag)
     }
 
-    assert {"message_filters", "tf2_eigen", "gtsam", "libnanoflann-dev"} <= dependencies
+    assert {"message_filters", "tf2_eigen", "gtsam", "libnanoflann-dev", "std_srvs"} <= dependencies
+
+
+def test_stream_audit_taps_ingress_before_sync_and_is_opt_in():
+    config = (Path(__file__).parents[1] / "config" / "simple_loop_closure.yaml").read_text()
+    source = (Path(__file__).parents[1] / "src" / "simple_loop_closure_node.cpp").read_text()
+
+    assert "simple_stream_audit: false" in config
+    assert source.index("cloud_audit_connection_ =") < source.index("synchronizer_ =")
+    assert source.index("odom_audit_connection_ =") < source.index("synchronizer_ =")
+    assert '"~/dump_stream_audit"' in source
+    assert 'emitStreamAudit("shutdown")' in source
+
+
+def test_pgo_depth_one_publish_calls_are_audited_before_publish():
+    source = (Path(__file__).parents[1] / "src" / "simple_loop_closure_node.cpp").read_text()
+    publisher = 'create_publisher<nav_msgs::msg::Odometry>("/pgo_odom", 1)'
+    audit_call = "audit.pgo_publish_calls.observe("
+    publish_call = "pub_pgo_odometry_->publish(pgo_odom_msg)"
+
+    assert publisher in source
+    assert source.index(audit_call) < source.index(publish_call)
 
 
 def test_generated_python_and_native_build_artifacts_are_ignored():

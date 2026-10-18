@@ -5,6 +5,7 @@ simple_loop_closure:
     expected_fixed_frame: camera_init
     expected_body_frame: aft_mapped
     require_exact_timestamps: true
+    simple_stream_audit: false
     keyframe_dist_th: 0.5
     keyframe_angular_dist_th: 0.3
     loop_search_time_diff_th: 30.0
