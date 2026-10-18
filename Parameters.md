@@ -15,6 +15,11 @@ tuple queue. The default is 10 and the operational range is `[1, 1024]`.
 - pgo_output_depth
 Reliable `KEEP_LAST` publisher history depth for `/pgo_odom`. Valid range:
 `[1, 1024]`.
+- cloud_input_telemetry
+Optional aggregate ingress telemetry for `/cloud` and `/odometry`. When `true`,
+the node requests native RMW message-lost and incompatible-QoS events, measures
+steady-clock callback interarrival/latest-peer age, and reports synchronized
+callback service time at shutdown. Default: `false`.
 - keyframe_dist_th  
 Unit : m  
 A frame is registered when the distance from the last registered frame is greater than this value.  

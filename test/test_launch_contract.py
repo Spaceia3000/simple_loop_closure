@@ -117,11 +117,13 @@ def test_cloud_input_depth_only_configures_cloud_rmw_receiver_queue():
     assert "cloud_input_qos.depth = validated_cloud_input_depth" in source
     assert "cloud_input_qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST" in source
     assert "cloud_input_qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE" in source
-    assert source.count('sub_cloud_.subscribe(this, "/cloud", cloud_input_qos)') == 1
-    assert source.count("cloud_input_qos") == 5
+    assert source.count('sub_cloud_.subscribe(this, "/cloud", cloud_input_qos)') == 2
+    assert source.count("cloud_input_qos") == 7
     assert source.count("validated_cloud_input_depth") == 2
-    assert source.count('sub_odom_.subscribe(this, "/odometry")') == 1
-    assert "sub_odom_.subscribe(this, \"/odometry\"," not in source
+    assert source.count('sub_odom_.subscribe(this, "/odometry")') == 2
+    assert source.count(
+        'sub_odom_.subscribe(this, "/odometry", rmw_qos_profile_default, odom_options)'
+    ) == 1
     assert "SyncPolicy(validated_sync_queue_size)" in source
     assert "sub_cloud_.getSubscriber()->get_actual_qos()" in source
 
@@ -146,6 +148,27 @@ def test_stream_audit_taps_ingress_before_sync_and_is_opt_in():
     assert source.index("odom_audit_connection_ =") < source.index("synchronizer_ =")
     assert '"~/dump_stream_audit"' in source
     assert 'emitStreamAudit("shutdown")' in source
+
+
+def test_cloud_input_telemetry_is_opt_in_and_preserves_default_subscriptions():
+    root = Path(__file__).parents[1]
+    config = (root / "config" / "simple_loop_closure.yaml").read_text()
+    source = (root / "src" / "simple_loop_closure_node.cpp").read_text()
+
+    assert "cloud_input_telemetry: false" in config
+    assert 'declare_parameter<bool>("cloud_input_telemetry", false)' in source
+    assert 'get_parameter("cloud_input_telemetry", cloud_input_telemetry_enabled_)' in source
+    disabled = source[source.index("else\n  {\n    sub_cloud_.subscribe") :]
+    assert 'sub_cloud_.subscribe(this, "/cloud", cloud_input_qos);' in disabled
+    assert 'sub_odom_.subscribe(this, "/odometry");' in disabled
+    assert 'sub_cloud_.subscribe(this, "/cloud", cloud_input_qos, cloud_options);' in source
+    assert (
+        'sub_odom_.subscribe(this, "/odometry", rmw_qos_profile_default, odom_options);'
+        in source
+    )
+    assert source.index("cloud_telemetry_connection_ =") < source.index("synchronizer_ =")
+    assert source.index("odom_telemetry_connection_ =") < source.index("synchronizer_ =")
+    assert 'emitIngressTelemetry();' in source
 
 
 def test_pgo_publish_attempt_return_and_failure_boundaries_are_explicit():

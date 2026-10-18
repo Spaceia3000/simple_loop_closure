@@ -1,0 +1,7 @@
+# Experimental C1 certification override. This file is inert unless passed
+# explicitly to rosbag2 play or record with --qos-profile-overrides-path.
+/cloud_registered_metric:
+  history: keep_last
+  depth: 100
+  reliability: reliable
+  durability: volatile

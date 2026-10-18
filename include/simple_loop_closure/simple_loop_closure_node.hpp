@@ -5,6 +5,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <simple_loop_closure/deterministic_loop_schedule.hpp>
 #include <simple_loop_closure/fast_livo2_contract.hpp>
+#include <simple_loop_closure/ingress_telemetry.hpp>
 #include <simple_loop_closure/keyframe_gate.hpp>
 #include <simple_loop_closure/stream_audit.hpp>
 
@@ -89,6 +90,8 @@ private:
     message_filters::Subscriber<nav_msgs::msg::Odometry> sub_odom_;
     message_filters::Connection cloud_audit_connection_;
     message_filters::Connection odom_audit_connection_;
+    message_filters::Connection cloud_telemetry_connection_;
+    message_filters::Connection odom_telemetry_connection_;
     std::shared_ptr<Sync> synchronizer_;
 
     struct StreamAuditContext
@@ -100,6 +103,9 @@ private:
     bool stream_audit_enabled_;
     std::shared_ptr<StreamAuditContext> stream_audit_context_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr stream_audit_service_;
+
+    bool cloud_input_telemetry_enabled_;
+    std::shared_ptr<simple_loop_closure::IngressTelemetry> ingress_telemetry_;
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr sub_save_req_;
 
@@ -180,6 +186,8 @@ private:
     std::string makeStreamAuditReport(const char* report_kind);
 
     void emitStreamAudit(const char* report_kind);
+
+    void emitIngressTelemetry();
 
     bool saveEachFrames();
 
