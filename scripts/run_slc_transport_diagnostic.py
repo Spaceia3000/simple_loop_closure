@@ -19,7 +19,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from transport_diagnostic_common import (
     DiagnosticError,
@@ -87,6 +87,14 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--backend-command",
         help="shell-like argv string, executed without a shell; default launches this package",
+    )
+    run.add_argument(
+        "--require-backend-audits",
+        action="store_true",
+        help=(
+            "require one passing native determinism audit and one passing shutdown "
+            "stream audit with complete source/sync/pgo accounting"
+        ),
     )
 
     audit = subparsers.add_parser("audit", help="rebuild a report from completed artifacts")
@@ -284,6 +292,184 @@ def start_logged(command: Sequence[str], log: Path, env: dict[str, str]):
     return process, stream
 
 
+def _parse_audit_payload(line: str, marker: str) -> dict[str, str]:
+    """Parse one whitespace-delimited native audit payload after its marker."""
+    payload = line[line.index(marker):].strip().split()
+    if not payload or payload[0] != marker:
+        raise DiagnosticError(f"invalid {marker} audit marker")
+    fields: dict[str, str] = {}
+    for token in payload[1:]:
+        if "=" not in token:
+            raise DiagnosticError(f"malformed {marker} audit token: {token!r}")
+        key, value = token.split("=", 1)
+        if not key or not value:
+            raise DiagnosticError(f"malformed {marker} audit token: {token!r}")
+        if key in fields:
+            raise DiagnosticError(f"duplicate {marker} audit field: {key}")
+        fields[key] = value
+    return fields
+
+
+def _integer_field(fields: Mapping[str, str], marker: str, key: str) -> int:
+    try:
+        value = fields[key]
+    except KeyError as exc:
+        raise DiagnosticError(f"{marker} audit missing field {key}") from exc
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise DiagnosticError(f"{marker} audit field {key} is not an integer: {value!r}") from exc
+    if parsed < 0:
+        raise DiagnosticError(f"{marker} audit field {key} is negative: {parsed}")
+    return parsed
+
+
+def validate_backend_audits(
+    backend_log: Path,
+    source_inventory: Mapping[str, list[dict[str, int]]],
+    cloud_topic: str,
+    odom_topic: str,
+) -> dict[str, object]:
+    """Validate the two native shutdown contracts required for graph certification."""
+    text = backend_log.read_text(encoding="utf-8", errors="replace")
+    determinism_marker = "SLC_DETERMINISM_AUDIT"
+    stream_marker = "SC_SIMPLE_STREAM_AUDIT"
+    determinism_lines = [line for line in text.splitlines() if determinism_marker in line]
+
+    stream_candidates: list[dict[str, str]] = []
+    stream_parse_errors: list[str] = []
+    for line in text.splitlines():
+        if stream_marker not in line:
+            continue
+        try:
+            fields = _parse_audit_payload(line, stream_marker)
+        except DiagnosticError as exc:
+            stream_parse_errors.append(str(exc))
+            continue
+        if fields.get("report") == "shutdown":
+            stream_candidates.append(fields)
+
+    result: dict[str, object] = {
+        "required": True,
+        "status": "FAIL",
+        "determinism_audit": {"line_count": len(determinism_lines), "status": "MISSING"},
+        "stream_shutdown_audit": {
+            "line_count": len(stream_candidates),
+            "status": "MISSING",
+        },
+    }
+    errors: list[str] = []
+
+    if len(determinism_lines) != 1:
+        errors.append(
+            f"expected exactly one {determinism_marker} line, found {len(determinism_lines)}"
+        )
+        if len(determinism_lines) > 1:
+            result["determinism_audit"]["status"] = "DUPLICATE"
+    else:
+        try:
+            determinism = _parse_audit_payload(determinism_lines[0], determinism_marker)
+            native_status = determinism.get("status", "MISSING")
+            result["determinism_audit"] = {
+                "line_count": 1,
+                "status": native_status,
+            }
+            if native_status != "PASS":
+                errors.append(f"{determinism_marker} status is {native_status}, not PASS")
+        except DiagnosticError as exc:
+            result["determinism_audit"]["status"] = "MALFORMED"
+            errors.append(str(exc))
+
+    stream: dict[str, str] | None = None
+    if stream_parse_errors:
+        errors.extend(stream_parse_errors)
+    if len(stream_candidates) != 1:
+        errors.append(
+            f"expected exactly one {stream_marker} report=shutdown line, "
+            f"found {len(stream_candidates)}"
+        )
+        if len(stream_candidates) > 1:
+            result["stream_shutdown_audit"]["status"] = "DUPLICATE"
+    else:
+        stream = stream_candidates[0]
+        native_status = stream.get("status", "MISSING")
+        result["stream_shutdown_audit"] = {
+            "line_count": 1,
+            "report": stream.get("report"),
+            "status": native_status,
+        }
+        if native_status != "PASS":
+            errors.append(f"{stream_marker} shutdown status is {native_status}, not PASS")
+
+    if stream is not None:
+        accounting_errors: list[str] = []
+        expected_cloud = len(source_inventory[cloud_topic])
+        expected_odom = len(source_inventory[odom_topic])
+        expected_sync = expected_cloud if expected_cloud == expected_odom else None
+        count_keys = (
+            "cloud_ingress_count",
+            "odom_ingress_count",
+            "sync_callback_count",
+            "contract_accepted_count",
+            "contract_rejected_count",
+            "pgo_publish_attempted_count",
+            "pgo_publish_completed_count",
+            "pgo_publish_failed_count",
+        )
+        counts: dict[str, int] = {}
+        for key in count_keys:
+            try:
+                counts[key] = _integer_field(stream, stream_marker, key)
+            except DiagnosticError as exc:
+                accounting_errors.append(str(exc))
+        expected_counts = {
+            "cloud_ingress_count": expected_cloud,
+            "odom_ingress_count": expected_odom,
+            "sync_callback_count": expected_sync,
+            "contract_accepted_count": expected_sync,
+            "contract_rejected_count": 0,
+            "pgo_publish_attempted_count": expected_sync,
+            "pgo_publish_completed_count": expected_sync,
+            "pgo_publish_failed_count": 0,
+        }
+        if expected_sync is None:
+            accounting_errors.append(
+                "source cloud/odometry counts differ; exact synchronized backend accounting "
+                f"is impossible ({expected_cloud} != {expected_odom})"
+            )
+        for key, expected in expected_counts.items():
+            if key in counts and expected is not None and counts[key] != expected:
+                accounting_errors.append(
+                    f"{stream_marker} {key}={counts[key]} expected {expected}"
+                )
+        required_true = (
+            "sync_accounting_ok",
+            "contract_accepted_to_pgo_attempted_ok",
+            "pgo_publish_outcome_accounting_ok",
+            "pgo_publish_no_failures",
+            "pgo_publish_attempted_to_completed_count_ok",
+            "pgo_publish_attempted_to_completed_ordered_digest_ok",
+        )
+        booleans = {key: stream.get(key, "MISSING") for key in required_true}
+        for key, value in booleans.items():
+            if value != "true":
+                accounting_errors.append(f"{stream_marker} {key} is {value}, not true")
+        errors.extend(accounting_errors)
+        result["stream_shutdown_audit"]["accounting"] = {
+            "source_cloud_count": expected_cloud,
+            "source_odom_count": expected_odom,
+            "reported_counts": counts,
+            "reported_checks": booleans,
+            "status": "PASS" if not accounting_errors else "FAIL",
+        }
+
+    if not errors:
+        result["status"] = "PASS"
+    else:
+        result["errors"] = errors
+    return result
+
+
 def run_diagnostic(args: argparse.Namespace) -> int:
     if args.playback_rate != 1.0:
         raise DiagnosticError("this diagnostic requires explicit real-time --playback-rate 1.0")
@@ -351,6 +537,7 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             "fail_closed": True,
             "aborted_replay_pass_eligible": False,
             "partial_audit_requires_readable_artifacts": True,
+            "require_backend_audits": args.require_backend_audits,
         },
         "timings_seconds": {
             "playback_rate": 1.0,
@@ -432,6 +619,34 @@ def run_diagnostic(args: argparse.Namespace) -> int:
             status.setdefault("returncodes", {})[name] = process.returncode
         if cleanup_errors:
             status["cleanup_errors"] = cleanup_errors
+
+    if args.require_backend_audits:
+        try:
+            backend_validation = validate_backend_audits(
+                output_dir / "backend.log",
+                source_inventory,
+                args.cloud_topic,
+                args.odom_topic,
+            )
+            status["backend_validation"] = backend_validation
+            if backend_validation["status"] != "PASS" and primary_error is None:
+                primary_error = DiagnosticError(
+                    "required backend audits did not pass: "
+                    + "; ".join(backend_validation.get("errors", ["unknown validation failure"]))
+                )
+                primary_traceback = primary_error.__traceback__
+        except Exception as exc:
+            validation_error = f"{type(exc).__name__}: {exc}"
+            status["backend_validation"] = {
+                "required": True,
+                "status": "ERROR",
+                "errors": [validation_error],
+            }
+            if primary_error is None:
+                primary_error = DiagnosticError(
+                    f"required backend audit validation failed: {validation_error}"
+                )
+                primary_traceback = primary_error.__traceback__
 
     try:
         udp_after = read_udp_counters()

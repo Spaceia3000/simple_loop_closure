@@ -65,9 +65,11 @@ applicable, and `pass_eligible=false`. Failure to salvage an audit is recorded
 in `run_status.json` and does not replace the original playback error.
 
 `run_status.completed` becomes true only when playback, managed-child cleanup,
-UDP evidence capture, and the artifact audit all succeed. Thus an aborted
-replay cannot be reported as a passing diagnostic even if its partial stamp
-counts happen to match.
+UDP evidence capture, and the artifact audit all succeed. When the later
+opt-in `--require-backend-audits` contract is enabled, completion additionally
+requires the native determinism and shutdown stream audits to pass complete
+source/sync/PGO accounting. Thus an aborted replay or missing native shutdown
+audit cannot be reported as passing even if its stamp counts happen to match.
 
 ## Verification
 

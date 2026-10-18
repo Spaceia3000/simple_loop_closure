@@ -22,6 +22,23 @@ ODOM = "/odom"
 PGO = "/pgo_odom"
 
 
+def passing_backend_audits(count=2):
+    return (
+        "[node] SLC_DETERMINISM_AUDIT status=PASS produced=3 copied=3 added=3 "
+        "searched=1 expected_searched=1 accepted=0 graph_nodes=3 graph_factors=3\n"
+        "[node] SC_SIMPLE_STREAM_AUDIT version=7 report=shutdown status=PASS "
+        f"cloud_ingress_count={count} odom_ingress_count={count} "
+        f"sync_callback_count={count} contract_accepted_count={count} "
+        "contract_rejected_count=0 "
+        f"pgo_publish_attempted_count={count} pgo_publish_completed_count={count} "
+        "pgo_publish_failed_count=0 sync_accounting_ok=true "
+        "contract_accepted_to_pgo_attempted_ok=true "
+        "pgo_publish_outcome_accounting_ok=true pgo_publish_no_failures=true "
+        "pgo_publish_attempted_to_completed_count_ok=true "
+        "pgo_publish_attempted_to_completed_ordered_digest_ok=true\n"
+    )
+
+
 def make_tiny_bag(path: Path) -> Path:
     path.mkdir()
     (path / "metadata.yaml").write_text("rosbag2_bagfile_information: {}\n", encoding="utf-8")
@@ -242,6 +259,149 @@ def test_stop_process_reports_failure_after_bounded_sigkill_wait():
     ):
         runner.stop_process(process, 1.5)
     assert process.wait.call_count == 3
+
+
+def test_backend_audits_require_single_passing_lines_and_complete_accounting(tmp_path):
+    backend_log = tmp_path / "backend.log"
+    backend_log.write_text(passing_backend_audits(), encoding="utf-8")
+    source = {CLOUD: [{}, {}], ODOM: [{}, {}]}
+
+    validation = runner.validate_backend_audits(backend_log, source, CLOUD, ODOM)
+
+    assert validation["status"] == "PASS"
+    assert validation["determinism_audit"] == {"line_count": 1, "status": "PASS"}
+    stream = validation["stream_shutdown_audit"]
+    assert stream["line_count"] == 1
+    assert stream["report"] == "shutdown"
+    assert stream["status"] == "PASS"
+    assert stream["accounting"]["status"] == "PASS"
+    assert stream["accounting"]["reported_counts"]["pgo_publish_completed_count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("audit_text", "expected_status", "expected_error"),
+    [
+        ("", "MISSING", "found 0"),
+        (
+            passing_backend_audits() + passing_backend_audits(),
+            "DUPLICATE",
+            "found 2",
+        ),
+        (
+            passing_backend_audits().replace(
+                "SLC_DETERMINISM_AUDIT status=PASS",
+                "SLC_DETERMINISM_AUDIT status=FAIL",
+            ),
+            "FAIL",
+            "status is FAIL",
+        ),
+        (
+            passing_backend_audits().replace(
+                "report=shutdown status=PASS", "report=shutdown status=INCONCLUSIVE"
+            ),
+            "PASS",
+            "status is INCONCLUSIVE",
+        ),
+        (
+            passing_backend_audits(count=1),
+            "PASS",
+            "cloud_ingress_count=1 expected 2",
+        ),
+    ],
+)
+def test_backend_audits_fail_closed(
+    tmp_path, audit_text, expected_status, expected_error
+):
+    backend_log = tmp_path / "backend.log"
+    backend_log.write_text(audit_text, encoding="utf-8")
+    source = {CLOUD: [{}, {}], ODOM: [{}, {}]}
+
+    validation = runner.validate_backend_audits(backend_log, source, CLOUD, ODOM)
+
+    assert validation["status"] == "FAIL"
+    assert validation["determinism_audit"]["status"] == expected_status
+    assert any(expected_error in error for error in validation["errors"])
+
+
+@pytest.mark.parametrize(
+    ("backend_log_text", "expected_completed"),
+    [("", False), (passing_backend_audits(count=1), True)],
+)
+def test_required_backend_audits_gate_otherwise_normal_runner(
+    tmp_path, monkeypatch, backend_log_text, expected_completed
+):
+    class FakeProcess:
+        next_pid = 200
+
+        def __init__(self):
+            self.args = ["mock"]
+            self.pid = FakeProcess.next_pid
+            FakeProcess.next_pid += 1
+            self.returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def wait(self, timeout=None):
+            self.returncode = 0
+            return 0
+
+        def send_signal(self, _sent_signal):
+            pass
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+    source = {CLOUD: [{"header_ns": 1}], ODOM: [{"header_ns": 1}]}
+
+    def fake_start(command, log, _env):
+        log.write_text(
+            backend_log_text if log.name == "backend.log" else "", encoding="utf-8"
+        )
+        return FakeProcess(), BytesIO()
+
+    def fake_audit(*audit_args, run_evidence):
+        report = {"run_evidence": run_evidence}
+        runner.write_json(audit_args[3], report)
+        return report
+
+    monkeypatch.setattr(runner, "inspect_bag", lambda *_args: source)
+    monkeypatch.setattr(runner, "bag_content_duration_seconds", lambda _bag: 1.0)
+    monkeypatch.setattr(runner, "read_udp_counters", lambda: {})
+    monkeypatch.setattr(runner, "snapshot_endpoints", lambda *_args: None)
+    monkeypatch.setattr(runner, "start_logged", fake_start)
+    monkeypatch.setattr(runner.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(runner.time, "monotonic", Mock(side_effect=[10.0, 10.0, 11.0]))
+    monkeypatch.setattr(runner, "audit_artifacts", fake_audit)
+
+    output = tmp_path / "out"
+    args = runner.parser().parse_args(
+        [
+            "run", "--bag", str(tmp_path / "source"), "--output-dir", str(output),
+            "--domain-id", "166", "--subscriber-qos-profile", "reliable",
+            "--cloud-topic", CLOUD, "--odom-topic", ODOM, "--pgo-topic", PGO,
+            "--require-backend-audits", "--startup-sec", "0.01",
+            "--endpoint-snapshot-delay-sec", "0.01", "--drain-sec", "0.01",
+            "--shutdown-timeout-sec", "0.01",
+        ]
+    )
+
+    if expected_completed:
+        assert runner.run_diagnostic(args) == 0
+    else:
+        with pytest.raises(diagnostic.DiagnosticError, match="required backend audits did not pass"):
+            runner.run_diagnostic(args)
+
+    status = json.loads((output / "run_status.json").read_text(encoding="utf-8"))
+    report = json.loads((output / "loss_report.json").read_text(encoding="utf-8"))
+    expected_status = "PASS" if expected_completed else "FAIL"
+    assert status["completed"] is expected_completed
+    assert status["backend_validation"]["status"] == expected_status
+    assert status["audit"]["pass_eligible"] is expected_completed
+    assert report["run_evidence"]["pass_eligible"] is expected_completed
 
 
 def test_timeout_run_is_failed_closed_and_salvages_partial_audit(tmp_path, monkeypatch):

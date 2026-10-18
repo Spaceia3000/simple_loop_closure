@@ -36,12 +36,29 @@ python3 scripts/run_slc_transport_diagnostic.py run \
   --endpoint-snapshot-delay-sec 0.5 \
   --drain-sec 2.0 \
   --shutdown-timeout-sec 10.0 \
-  --playback-timeout-sec 360.0
+  --playback-timeout-sec 360.0 \
+  --require-backend-audits
 ```
 
 `--playback-timeout-sec` is optional and has no implicit default. Supply a
 finite positive value to bound playback wall time explicitly; omitting it
 retains an unbounded playback wait for compatibility with prior experiments.
+
+`--require-backend-audits` is also opt-in so generic fixture backends retain
+their previous behavior. Enable it for native SLC graph-certification runs.
+After bounded child shutdown and log closure, the runner requires exactly one
+`SLC_DETERMINISM_AUDIT status=PASS` line and exactly one
+`SC_SIMPLE_STREAM_AUDIT report=shutdown status=PASS` line. Missing, duplicate,
+malformed, `FAIL`, `INCONCLUSIVE`, or other non-PASS audits fail closed.
+
+The stream shutdown audit must also account for the complete source bag:
+cloud and odometry ingress, synchronized callbacks, accepted contracts, and
+attempted/completed PGO publishes must equal the corresponding source count;
+rejected contracts and failed publishes must be zero. Native sync and PGO
+accounting flags must be true. The parsed result and explicit failure reasons
+are recorded under `backend_validation` in `run_status.json`. A launch-wrapper
+return code is retained as evidence but is never a substitute for these node
+audits.
 
 The default backend command is:
 
@@ -82,7 +99,8 @@ The exclusive output directory contains:
 - `udp_before.json`, `udp_after.json`, and `udp_delta.json`: read-only host UDP MIB evidence
 - one log per managed process and fail-closed `run_status.json`, including
   monotonic playback elapsed time, metadata duration when readable, and a
-  completion-only effective throughput ratio
+  completion-only effective throughput ratio; with
+  `--require-backend-audits`, it also includes native backend validation status
 
 An audit can be rebuilt without replay:
 
@@ -114,6 +132,10 @@ On an aborted run, the wrapper first performs bounded cleanup of its exact
 children and then attempts a partial audit. It writes `loss_report.json` only
 when the SQLite and witness artifacts are readable, and marks that report
 `pass_eligible=false`; an aborted replay is never a passing diagnostic.
+The same partial/ineligible rule applies when replay and artifact collection
+finish but required backend audit validation fails. Thus a wrapper `rc=0`, or
+even complete source/witness/recorder counts, cannot certify a backend whose
+native shutdown audit is missing or incomplete.
 
 ## Small tests
 
