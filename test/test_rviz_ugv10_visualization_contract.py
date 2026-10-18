@@ -16,7 +16,8 @@ def test_humble_global_local_topic_and_display_contract():
     }
     assert len(markers) == 3
     assert {m["Topic"]["Value"] for m in markers} == expected
-    assert all(m["Enabled"] and m["Value"] for m in markers)
+    assert all(m["Enabled"] and m["Value"] for m in markers if m["Topic"]["Value"] != "/simple_loop_closure/original_keyframes")
+    assert next(m for m in markers if m["Topic"]["Value"] == "/simple_loop_closure/original_keyframes")["Enabled"] is False
     assert all("Marker Topic" not in m for m in markers)
     assert all(m["Topic"]["Reliability Policy"] == "Reliable" for m in markers)
 
@@ -27,7 +28,7 @@ def test_humble_global_local_topic_and_display_contract():
     }
     assert set(paths) == {"/path"}
     assert paths["/path"]["Color"] == "0; 255; 255"
-    assert paths["/path"]["Line Width"] == 0.08
+    assert paths["/path"]["Line Width"] == 0.03
     assert all(item["Enabled"] for item in paths.values())
 
     clouds = [d for d in displays if d["Class"] == "rviz_default_plugins/PointCloud2"]
@@ -40,11 +41,11 @@ def test_humble_global_local_topic_and_display_contract():
     cumulative = next(c for c in rgb if c["Decay Time"] == 10000)
     newest = next(c for c in rgb if c["Decay Time"] == 0)
     assert cumulative["Enabled"] and cumulative["Value"]
-    assert not newest["Enabled"] and not newest["Value"]
+    assert newest["Enabled"] and newest["Value"]
     metric = next(c for c in clouds if c["Topic"]["Value"] == "/cloud_registered_metric")
     assert metric["Enabled"] and metric["Value"]
     assert metric["Color Transformer"] == "FlatColor"
-    assert metric["Decay Time"] == 0 and metric["Size (Pixels)"] == 2
+    assert metric["Decay Time"] == 2 and metric["Size (Pixels)"] == 2
 
     images = [d for d in displays if d["Class"] == "rviz_default_plugins/Image"]
     assert len(images) == 1

@@ -51,7 +51,7 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /pgo_odom
       Value: true
-    - Alpha: 0.9
+    - Alpha: 0.18
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
       Axis: Z
@@ -66,12 +66,12 @@ Visualization Manager:
       Max Intensity: 4096
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: GLOBAL PGO map (grey XYZI, no RGB)
+      Name: GLOBAL PGO geometry overlay (faint XYZI, not RGB)
       Position Transformer: XYZ
       Selectable: true
-      Size (Pixels): 3
+      Size (Pixels): 1
       Size (m): 0.01
-      Style: Flat Squares
+      Style: Points
       Topic:
         Depth: 5
         Durability Policy: Volatile
@@ -105,7 +105,7 @@ Visualization Manager:
         Value: /simple_loop_closure/optimized_keyframes
       Value: true
     - Class: rviz_default_plugins/Marker
-      Enabled: true
+      Enabled: false
       Name: LOCAL true FAST keyframe poses (cyan native marker)
       Topic:
         Depth: 10
@@ -114,7 +114,7 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /simple_loop_closure/original_keyframes
-      Value: true
+      Value: false
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path
@@ -124,7 +124,7 @@ Visualization Manager:
       Head Length: 0.2
       Length: 0.3
       Line Style: Billboards
-      Line Width: 0.08
+      Line Width: 0.03
       Name: LOCAL FAST path (cyan, uncorrected geometry)
       Offset: {X: 0, Y: 0, Z: 0}
       Pose Color: 0; 255; 255
@@ -140,7 +140,7 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /path
       Value: true
-    - Alpha: 0.8
+    - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
       Axis: Z
@@ -155,7 +155,7 @@ Visualization Manager:
       Max Intensity: 4096
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: LOCAL FAST RGB cumulative preview (not loop-corrected)
+      Name: LOCAL FAST accumulated RGB 3D map (not loop-corrected)
       Position Transformer: XYZ
       Selectable: false
       Size (Pixels): 2
@@ -195,7 +195,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: RGB8
       Decay Time: 0
-      Enabled: false
+      Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Max Intensity: 4096
@@ -204,7 +204,7 @@ Visualization Manager:
       Name: LOCAL FAST newest RGB scan (optional, not loop-corrected)
       Position Transformer: XYZ
       Selectable: false
-      Size (Pixels): 2
+      Size (Pixels): 4
       Size (m): 0.005
       Style: Points
       Topic:
@@ -216,7 +216,7 @@ Visualization Manager:
         Value: /cloud_registered
       Use Fixed Frame: true
       Use rainbow: true
-      Value: false
+      Value: true
     - Class: rviz_default_plugins/Image
       Enabled: true
       Max Value: 1
@@ -231,7 +231,7 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /rgb_img
       Value: true
-    - Alpha: 1
+    - Alpha: 0.65
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
       Axis: Z
@@ -239,14 +239,14 @@ Visualization Manager:
       Class: rviz_default_plugins/PointCloud2
       Color: 255; 188; 85
       Color Transformer: FlatColor
-      Decay Time: 0
+      Decay Time: 2
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Max Intensity: 4096
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: LOCAL current LiDAR metric scan (amber XYZI; not accumulated map)
+      Name: LOCAL LiDAR metric 2-second window (amber XYZI; not voxel map)
       Position Transformer: XYZ
       Selectable: false
       Size (Pixels): 2

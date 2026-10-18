@@ -60,7 +60,7 @@ def test_global_and_local_displays_have_distinct_topics_and_styles():
 
     path = by_topic["/path"]
     assert path["Enabled"] and path["Color"] == "0; 255; 255"
-    assert path["Line Width"] == 0.08
+    assert path["Line Width"] == 0.03
 
     pgo_pose = by_topic["/pgo_odom"]
     assert pgo_pose["Enabled"] and pgo_pose["Keep"] == 1
@@ -77,11 +77,11 @@ def test_global_and_local_displays_have_distinct_topics_and_styles():
         "/cloud_registered_metric",
         "/rgb_img",
     ):
-        assert by_topic[topic]["Enabled"] and by_topic[topic]["Value"]
+        assert by_topic[topic]["Enabled"] and by_topic[topic]["Value"] if topic != "/simple_loop_closure/original_keyframes" else not by_topic[topic]["Enabled"]
 
     metric = by_topic["/cloud_registered_metric"]
     assert metric["Color Transformer"] == "FlatColor"
-    assert metric["Decay Time"] == 0
+    assert metric["Decay Time"] == 2
     assert metric["Size (Pixels)"] == 2
 
     topics = {display["Topic"]["Value"] for display in displays if "Topic" in display}
