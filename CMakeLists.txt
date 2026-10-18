@@ -116,6 +116,8 @@ if(BUILD_TESTING)
   )
   ament_add_gtest(test_stream_audit test/test_stream_audit.cpp)
   target_include_directories(test_stream_audit PRIVATE include)
+  ament_add_gtest(test_ingress_telemetry test/test_ingress_telemetry.cpp)
+  target_include_directories(test_ingress_telemetry PRIVATE include)
   ament_add_gtest(test_keyframe_gate test/test_keyframe_gate.cpp)
   target_include_directories(test_keyframe_gate PRIVATE include)
   target_compile_definitions(test_keyframe_gate PRIVATE

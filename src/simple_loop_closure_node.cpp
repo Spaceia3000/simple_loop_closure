@@ -6,6 +6,35 @@
 namespace
 {
 
+using SteadyClock = std::chrono::steady_clock;
+
+std::uint64_t steadyNowNs() noexcept
+{
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          SteadyClock::now().time_since_epoch()).count());
+}
+
+class ScopedSyncServiceTimer
+{
+public:
+  explicit ScopedSyncServiceTimer(
+      std::shared_ptr<simple_loop_closure::IngressTelemetry> telemetry) noexcept
+  : telemetry_(std::move(telemetry)), start_ns_(telemetry_ ? steadyNowNs() : 0)
+  {
+  }
+
+  ~ScopedSyncServiceTimer() noexcept
+  {
+    if (telemetry_)
+      telemetry_->synchronized_callback_service.observe(steadyNowNs() - start_ns_);
+  }
+
+private:
+  std::shared_ptr<simple_loop_closure::IngressTelemetry> telemetry_;
+  std::uint64_t start_ns_;
+};
+
 volatile std::sig_atomic_t shutdown_signal_received = 0;
 
 void requestStagedShutdown(int)
@@ -79,6 +108,7 @@ void SimpleLoopClosureNode::initialize()
   this->declare_parameter<std::string>("expected_body_frame", "aft_mapped");
   this->declare_parameter<bool>("require_exact_timestamps", true);
   this->declare_parameter<bool>("simple_stream_audit", false);
+  this->declare_parameter<bool>("cloud_input_telemetry", false);
 
   this->get_parameter("mapped_cloud", mapped_cloud_);
   this->get_parameter("time_stamp_tolerance", time_stamp_tolerance_);
@@ -102,6 +132,7 @@ void SimpleLoopClosureNode::initialize()
   this->get_parameter("expected_body_frame", input_contract_.body_frame);
   this->get_parameter("require_exact_timestamps", input_contract_.require_exact_stamp);
   this->get_parameter("simple_stream_audit", stream_audit_enabled_);
+  this->get_parameter("cloud_input_telemetry", cloud_input_telemetry_enabled_);
 
   if (!mapped_cloud_)
     throw std::invalid_argument(
@@ -135,8 +166,84 @@ void SimpleLoopClosureNode::initialize()
   cloud_input_qos.depth = validated_cloud_input_depth;
   cloud_input_qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
   cloud_input_qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
-  sub_cloud_.subscribe(this, "/cloud", cloud_input_qos);
-  sub_odom_.subscribe(this, "/odometry");
+  if (cloud_input_telemetry_enabled_)
+  {
+    ingress_telemetry_ = std::make_shared<simple_loop_closure::IngressTelemetry>();
+    const std::weak_ptr<simple_loop_closure::IngressTelemetry> weak_telemetry(ingress_telemetry_);
+    rclcpp::SubscriptionOptions cloud_options;
+    cloud_options.event_callbacks.message_lost_callback =
+        [weak_telemetry](rclcpp::QOSMessageLostInfo& info) noexcept {
+          if (const auto telemetry = weak_telemetry.lock())
+            telemetry->cloud_events.observeMessageLost(info.total_count, info.total_count_change);
+        };
+    cloud_options.event_callbacks.incompatible_qos_callback =
+        [weak_telemetry](rclcpp::QOSRequestedIncompatibleQoSInfo& info) noexcept {
+          if (const auto telemetry = weak_telemetry.lock())
+          {
+            telemetry->cloud_events.observeIncompatibleQos(
+                info.total_count, info.total_count_change,
+                static_cast<std::int32_t>(info.last_policy_kind));
+          }
+        };
+    rclcpp::SubscriptionOptions odom_options;
+    odom_options.event_callbacks.message_lost_callback =
+        [weak_telemetry](rclcpp::QOSMessageLostInfo& info) noexcept {
+          if (const auto telemetry = weak_telemetry.lock())
+            telemetry->odom_events.observeMessageLost(info.total_count, info.total_count_change);
+        };
+    odom_options.event_callbacks.incompatible_qos_callback =
+        [weak_telemetry](rclcpp::QOSRequestedIncompatibleQoSInfo& info) noexcept {
+          if (const auto telemetry = weak_telemetry.lock())
+          {
+            telemetry->odom_events.observeIncompatibleQos(
+                info.total_count, info.total_count_change,
+                static_cast<std::int32_t>(info.last_policy_kind));
+          }
+        };
+
+    try
+    {
+      sub_cloud_.subscribe(this, "/cloud", cloud_input_qos, cloud_options);
+      ingress_telemetry_->cloud_events.setSupported(true);
+    }
+    catch (const rclcpp::UnsupportedEventTypeException& exception)
+    {
+      RCLCPP_WARN(
+          this->get_logger(),
+          "Cloud subscription RMW event telemetry is unsupported (%s); continuing without event callbacks",
+          exception.what());
+      sub_cloud_.subscribe(this, "/cloud", cloud_input_qos);
+    }
+    try
+    {
+      sub_odom_.subscribe(this, "/odometry", rmw_qos_profile_default, odom_options);
+      ingress_telemetry_->odom_events.setSupported(true);
+    }
+    catch (const rclcpp::UnsupportedEventTypeException& exception)
+    {
+      RCLCPP_WARN(
+          this->get_logger(),
+          "Odometry subscription RMW event telemetry is unsupported (%s); continuing without event callbacks",
+          exception.what());
+      sub_odom_.subscribe(this, "/odometry");
+    }
+
+    cloud_telemetry_connection_ = sub_cloud_.registerCallback(
+        [weak_telemetry](const sensor_msgs::msg::PointCloud2::ConstSharedPtr&) noexcept {
+          if (const auto telemetry = weak_telemetry.lock())
+            telemetry->observeCloudArrival(steadyNowNs());
+        });
+    odom_telemetry_connection_ = sub_odom_.registerCallback(
+        [weak_telemetry](const nav_msgs::msg::Odometry::ConstSharedPtr&) noexcept {
+          if (const auto telemetry = weak_telemetry.lock())
+            telemetry->observeOdomArrival(steadyNowNs());
+        });
+  }
+  else
+  {
+    sub_cloud_.subscribe(this, "/cloud", cloud_input_qos);
+    sub_odom_.subscribe(this, "/odometry");
+  }
 
   if (stream_audit_enabled_)
   {
@@ -258,6 +365,16 @@ void SimpleLoopClosureNode::emitStreamAudit(const char* report_kind)
   const std::string report = makeStreamAuditReport(report_kind);
   if (!report.empty())
     std::cout << report << std::endl;
+}
+
+void SimpleLoopClosureNode::emitIngressTelemetry()
+{
+  if (!ingress_telemetry_)
+    return;
+  std::cout << simple_loop_closure::formatIngressTelemetryReport(
+      ingress_telemetry_->snapshot(),
+      formatQos(sub_cloud_.getSubscriber()->get_actual_qos()),
+      formatQos(sub_odom_.getSubscriber()->get_actual_qos())) << std::endl;
 }
 
 bool SimpleLoopClosureNode::inputContractValid(
@@ -447,6 +564,7 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr& cloud_msg,
     const nav_msgs::msg::Odometry::ConstSharedPtr& odom_msg)
 {
+  ScopedSyncServiceTimer telemetry_timer(ingress_telemetry_);
   const std::int64_t cloud_stamp_ns = rclcpp::Time(cloud_msg->header.stamp).nanoseconds();
   const std::int64_t odom_stamp_ns = rclcpp::Time(odom_msg->header.stamp).nanoseconds();
   if (stream_audit_context_)
@@ -1162,7 +1280,10 @@ void SimpleLoopClosureNode::shutdownAndDrain()
   publishDeterminismAudit();
   cloud_audit_connection_.disconnect();
   odom_audit_connection_.disconnect();
+  cloud_telemetry_connection_.disconnect();
+  odom_telemetry_connection_.disconnect();
   emitStreamAudit("shutdown");
+  emitIngressTelemetry();
 }
 
 void SimpleLoopClosureNode::visualizeThread()
