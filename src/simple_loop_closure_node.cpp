@@ -13,7 +13,7 @@ void requestStagedShutdown(int)
   shutdown_signal_received = 1;
 }
 
-std::string formatPublisherQos(const rclcpp::QoS& qos)
+std::string formatQos(const rclcpp::QoS& qos)
 {
   const rmw_qos_profile_t& profile = qos.get_rmw_qos_profile();
   const char* reliability =
@@ -60,6 +60,7 @@ void SimpleLoopClosureNode::initialize()
   this->declare_parameter<bool>("mapped_cloud", true);
   this->declare_parameter<double>("time_stamp_tolerance", 0.01);
   this->declare_parameter<std::int64_t>("sync_queue_size", 50);
+  this->declare_parameter<std::int64_t>("cloud_input_depth", 10);
   this->declare_parameter<std::int64_t>("pgo_output_depth", 1);
   this->declare_parameter<double>("keyframe_dist_th", 0.3);
   this->declare_parameter<double>("keyframe_angular_dist_th", 0.2);
@@ -82,6 +83,7 @@ void SimpleLoopClosureNode::initialize()
   this->get_parameter("mapped_cloud", mapped_cloud_);
   this->get_parameter("time_stamp_tolerance", time_stamp_tolerance_);
   this->get_parameter("sync_queue_size", sync_queue_size_);
+  this->get_parameter("cloud_input_depth", cloud_input_depth_);
   this->get_parameter("pgo_output_depth", pgo_output_depth_);
   this->get_parameter("keyframe_dist_th", keyframe_dist_th_);
   this->get_parameter("keyframe_angular_dist_th", keyframe_angular_dist_th_);
@@ -113,6 +115,8 @@ void SimpleLoopClosureNode::initialize()
       vis_map_cloud_frame_interval_);
   const std::uint32_t validated_sync_queue_size =
       simple_loop_closure::validateSyncQueueSize(sync_queue_size_);
+  const std::uint32_t validated_cloud_input_depth =
+      simple_loop_closure::validateCloudInputDepth(cloud_input_depth_);
   const std::uint32_t validated_pgo_output_depth =
       simple_loop_closure::validatePgoOutputDepth(pgo_output_depth_);
   if (loop_search_frame_interval_ < 0)
@@ -125,7 +129,13 @@ void SimpleLoopClosureNode::initialize()
   stop_loop_closure_thread_ = false;
   stop_visualize_thread_ = false;
 
-  sub_cloud_.subscribe(this, "/cloud");
+  // This RMW receiver history is independent of the ExactTime tuple queue
+  // constructed below: it controls samples waiting to reach this callback.
+  rmw_qos_profile_t cloud_input_qos = rmw_qos_profile_default;
+  cloud_input_qos.depth = validated_cloud_input_depth;
+  cloud_input_qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
+  cloud_input_qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
+  sub_cloud_.subscribe(this, "/cloud", cloud_input_qos);
   sub_odom_.subscribe(this, "/odometry");
 
   if (stream_audit_enabled_)
@@ -229,7 +239,8 @@ simple_loop_closure::StreamAuditSnapshot SimpleLoopClosureNode::captureStreamAud
   simple_loop_closure::StreamAuditSnapshot snapshot;
   std::scoped_lock guard(stream_audit_context_->mutex, mtx_buf_, mtx_res_);
   snapshot.audit = stream_audit_context_->audit;
-  snapshot.pgo_publisher_qos = formatPublisherQos(pub_pgo_odometry_->get_actual_qos());
+  snapshot.cloud_subscriber_qos = formatQos(sub_cloud_.getSubscriber()->get_actual_qos());
+  snapshot.pgo_publisher_qos = formatQos(pub_pgo_odometry_->get_actual_qos());
   snapshot.keyframes_stored = keyframes_odom_.size();
   snapshot.loop_factors = loop_edges_.size();
   return snapshot;

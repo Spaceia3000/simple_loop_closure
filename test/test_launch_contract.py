@@ -94,10 +94,36 @@ def test_pgo_output_depth_is_bounded_baseline_default_and_only_configures_pgo():
         '"/simple_loop_closure/original_keyframes", 1',
         '"/simple_loop_closure/optimized_keyframes", 1',
         '"/simple_loop_closure/loop_edges", 1',
-        'sub_cloud_.subscribe(this, "/cloud")',
         'sub_odom_.subscribe(this, "/odometry")',
     ):
         assert unchanged_endpoint in source
+
+
+def test_cloud_input_depth_only_configures_cloud_rmw_receiver_queue():
+    root = Path(__file__).parents[1]
+    config = (root / "config" / "simple_loop_closure.yaml").read_text()
+    header = (root / "include" / "simple_loop_closure" / "simple_loop_closure_node.hpp").read_text()
+    source = (root / "src" / "simple_loop_closure_node.cpp").read_text()
+
+    assert "cloud_input_depth: 10" in config
+    assert "RMW /cloud receiver queue capacity, before message_filters ExactTime" in config
+    assert 'declare_parameter<std::int64_t>("cloud_input_depth", 10)' in source
+    assert 'get_parameter("cloud_input_depth", cloud_input_depth_)' in source
+    assert "std::int64_t cloud_input_depth_;" in header
+    assert "validateCloudInputDepth(cloud_input_depth_)" in source
+    assert source.index("validateCloudInputDepth(cloud_input_depth_)") < source.index(
+        "rmw_qos_profile_t cloud_input_qos = rmw_qos_profile_default"
+    )
+    assert "cloud_input_qos.depth = validated_cloud_input_depth" in source
+    assert "cloud_input_qos.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST" in source
+    assert "cloud_input_qos.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE" in source
+    assert source.count('sub_cloud_.subscribe(this, "/cloud", cloud_input_qos)') == 1
+    assert source.count("cloud_input_qos") == 5
+    assert source.count("validated_cloud_input_depth") == 2
+    assert source.count('sub_odom_.subscribe(this, "/odometry")') == 1
+    assert "sub_odom_.subscribe(this, \"/odometry\"," not in source
+    assert "SyncPolicy(validated_sync_queue_size)" in source
+    assert "sub_cloud_.getSubscriber()->get_actual_qos()" in source
 
 
 def test_humble_manifest_declares_direct_adapter_dependencies():

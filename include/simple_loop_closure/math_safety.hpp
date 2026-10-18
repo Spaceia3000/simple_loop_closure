@@ -31,6 +31,18 @@ inline std::uint32_t validateSyncQueueSize(const std::int64_t sync_queue_size)
   return static_cast<std::uint32_t>(sync_queue_size);
 }
 
+// Operational receiver-resource cap, not an empirically selected input depth.
+inline constexpr std::uint32_t kMaxCloudInputDepth = 1024U;
+
+inline std::uint32_t validateCloudInputDepth(const std::int64_t cloud_input_depth)
+{
+  if (cloud_input_depth <= 0 ||
+      static_cast<std::uint64_t>(cloud_input_depth) > kMaxCloudInputDepth)
+    throw std::invalid_argument(
+        "cloud_input_depth must be in the operational safety range [1, 1024]");
+  return static_cast<std::uint32_t>(cloud_input_depth);
+}
+
 // Operational resource cap, not an empirically selected delivery setting.
 inline constexpr std::uint32_t kMaxPgoOutputDepth = 1024U;
 

@@ -4,6 +4,17 @@ Set to "true" if the scan data to subscribe has already been mapped to the same 
 - time_stamp_tolerance  
 Unit : sec  
 Tolerance for odometry and scan data timestamps.  
+- sync_queue_size
+Capacity of the `message_filters::ExactTime` tuple queue. This is separate from
+the RMW receiver queues used by the cloud and odometry subscriptions. Valid
+range: `[1, 1024]`.
+- cloud_input_depth
+Reliable `KEEP_LAST` RMW receiver queue depth for `/cloud` only. It controls
+samples waiting to reach `message_filters`; it does not resize the ExactTime
+tuple queue. The default is 10 and the operational range is `[1, 1024]`.
+- pgo_output_depth
+Reliable `KEEP_LAST` publisher history depth for `/pgo_odom`. Valid range:
+`[1, 1024]`.
 - keyframe_dist_th  
 Unit : m  
 A frame is registered when the distance from the last registered frame is greater than this value.  
@@ -43,4 +54,4 @@ It affects only the point cloud to be Publish.
 If the Fitness Score of the ICP is below this value, the loop edge is registered.  
 - vis_map_cloud_frame_interval  
 Skip nodes at this interval when creating a point cloud map to publish.
-It affects only the point cloud to be Publish.  
+It affects only the point cloud to be Publish.

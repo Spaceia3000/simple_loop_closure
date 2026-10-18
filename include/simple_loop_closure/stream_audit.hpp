@@ -97,6 +97,7 @@ struct StreamAudit
 struct StreamAuditSnapshot
 {
   StreamAudit audit;
+  std::string cloud_subscriber_qos{"unknown"};
   std::string pgo_publisher_qos{"unknown"};
   std::uint64_t keyframes_stored{0};
   std::uint64_t loop_factors{0};
@@ -187,10 +188,11 @@ inline std::string formatStreamAuditReport(
                                                  : "FAIL";
 
   std::ostringstream out;
-  out << "SC_SIMPLE_STREAM_AUDIT version=7 report=" << report_kind
+  out << "SC_SIMPLE_STREAM_AUDIT version=8 report=" << report_kind
       << " status=" << status
       << " status_scope=internal_call_and_stage_accounting"
       << " external_source_count=not_observed"
+      << " cloud_subscriber_qos=" << snapshot.cloud_subscriber_qos
       << " pgo_recorder=external_compare_required"
       << " pgo_publisher_qos=" << snapshot.pgo_publisher_qos
       << " dds_delivery_status=INCONCLUSIVE"

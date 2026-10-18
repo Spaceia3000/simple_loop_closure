@@ -5,6 +5,9 @@ simple_loop_closure:
     # Experimental runtime-arrival buffer; not a certified optimum. The code
     # default remains 50 and the operational memory-safety cap is 1024.
     sync_queue_size: 128
+    # RMW /cloud receiver queue capacity, before message_filters ExactTime.
+    # Depth 100 is an experiment; the baseline-preserving default is 10.
+    cloud_input_depth: 10
     # Baseline-preserving output history. Depths 10 and 100 are experiments,
     # not production defaults, until the controlled delivery A/B is complete.
     pgo_output_depth: 1

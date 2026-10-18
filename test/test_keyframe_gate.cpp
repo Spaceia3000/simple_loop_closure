@@ -234,6 +234,26 @@ TEST(PgoOutputDepth, EnforcesOperationalResourceBoundaries)
       std::invalid_argument);
 }
 
+TEST(CloudInputDepth, ValidatesSignedValueBeforeBoundedUnsignedConversion)
+{
+  EXPECT_THROW(
+      simple_loop_closure::validateCloudInputDepth(std::numeric_limits<std::int64_t>::min()),
+      std::invalid_argument);
+  EXPECT_THROW(simple_loop_closure::validateCloudInputDepth(-1), std::invalid_argument);
+  EXPECT_THROW(simple_loop_closure::validateCloudInputDepth(0), std::invalid_argument);
+  EXPECT_EQ(simple_loop_closure::validateCloudInputDepth(1), 1U);
+  EXPECT_EQ(simple_loop_closure::validateCloudInputDepth(10), 10U);
+  EXPECT_EQ(simple_loop_closure::validateCloudInputDepth(100), 100U);
+  EXPECT_EQ(
+      simple_loop_closure::validateCloudInputDepth(
+          simple_loop_closure::kMaxCloudInputDepth),
+      1024U);
+  EXPECT_THROW(simple_loop_closure::validateCloudInputDepth(1025), std::invalid_argument);
+  EXPECT_THROW(
+      simple_loop_closure::validateCloudInputDepth(std::numeric_limits<std::int64_t>::max()),
+      std::invalid_argument);
+}
+
 TEST(KeyframeGate, ThresholdCrossingsRemainConsistentAcrossAuditedStages)
 {
   const Eigen::Affine3d previous = pose();
