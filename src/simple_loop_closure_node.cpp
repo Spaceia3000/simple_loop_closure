@@ -415,9 +415,6 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     return;
   }
 
-  PointCloudType::Ptr cloud_curr(new PointCloudType);
-  pcl::fromROSMsg(*cloud_msg, *cloud_curr);
-
   Affine3dPtr affine_curr(new Eigen::Affine3d);
   tf2::fromMsg(odom_msg->pose.pose, *affine_curr);
 
@@ -429,6 +426,29 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
 
   publishPoseGraphOptimizedOdometry(*affine_curr, *odom_msg);
 
+  simple_loop_closure::KeyframeDecision decision;
+  {
+    MtxLockGuard guard(mtx_buf_);
+    const Eigen::Affine3d* previous_pose =
+        keyframes_odom_.empty() ? nullptr : keyframes_odom_.back().get();
+    decision = simple_loop_closure::decideKeyframe(
+        previous_pose, *affine_curr, keyframe_dist_th_, keyframe_angular_dist_th_);
+  }
+
+  if (stream_audit_context_)
+  {
+    std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
+    if (decision.is_keyframe)
+      stream_audit_context_->audit.keyframe_selected.observe(odom_stamp_ns);
+    else
+      stream_audit_context_->audit.keyframe_skipped.observe(odom_stamp_ns);
+  }
+  if (!decision.is_keyframe)
+    return;
+
+  PointCloudType::Ptr cloud_curr(new PointCloudType);
+  pcl::fromROSMsg(*cloud_msg, *cloud_curr);
+
   if (mapped_cloud_)
   {
     PointCloudType::Ptr cloud_base(new PointCloudType);
@@ -438,47 +458,23 @@ void SimpleLoopClosureNode::pointCloudAndOdometryCallback(
     cloud_curr = cloud_base;
   }
 
-  bool keyframe_skipped = false;
   {
     MtxLockGuard guard(mtx_buf_);
-    if (!keyframes_odom_.empty())
-    {
-      const double distance =
-          (keyframes_odom_.back()->translation() - affine_curr->translation()).norm();
-      const Eigen::Quaterniond quat_prev(keyframes_odom_.back()->rotation());
-      const Eigen::Quaterniond quat_curr(affine_curr->rotation());
-      const double angle = quat_prev.angularDistance(quat_curr);
-      if (distance < keyframe_dist_th_ && angle < keyframe_angular_dist_th_)
-        keyframe_skipped = true;
-      else
-        trajectory_dist_.push_back(trajectory_dist_.back() + distance);
-    }
-    else
-    {
+    const bool first_keyframe = keyframes_odom_.empty();
+    if (first_keyframe)
       odom_frame_id_ = odom_msg->header.frame_id;
-      trajectory_dist_.push_back(0);
-    }
+    trajectory_dist_.push_back(simple_loop_closure::nextTrajectoryDistance(
+        first_keyframe, first_keyframe ? 0.0 : trajectory_dist_.back(), decision));
 
-    if (!keyframe_skipped)
-    {
-      keyframes_cloud_.push_back(cloud_curr);
-      keyframes_odom_.push_back(affine_curr);
-      latest_input_header_ = odom_msg->header;
-    }
+    keyframes_cloud_.push_back(cloud_curr);
+    keyframes_odom_.push_back(affine_curr);
+    latest_input_header_ = odom_msg->header;
   }
   if (stream_audit_context_)
   {
     std::lock_guard<std::mutex> guard(stream_audit_context_->mutex);
-    if (keyframe_skipped)
-      stream_audit_context_->audit.keyframe_skipped.observe(odom_stamp_ns);
-    else
-    {
-      stream_audit_context_->audit.keyframe_selected.observe(odom_stamp_ns);
-      stream_audit_context_->audit.keyframes_inserted.observe(odom_stamp_ns);
-    }
+    stream_audit_context_->audit.keyframes_inserted.observe(odom_stamp_ns);
   }
-  if (keyframe_skipped)
-    return;
   keyframe_changed_.notify_one();
 }
 
