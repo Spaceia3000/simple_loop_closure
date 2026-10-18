@@ -20,19 +20,31 @@ Visualization Manager:
       Name: A original keyframes (cyan)
       Enabled: true
       Value: true
-      Marker Topic:
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /simple_loop_closure/original_keyframes
     - Class: rviz_default_plugins/Marker
       Name: B optimized keyframes (magenta)
       Enabled: true
       Value: true
-      Marker Topic:
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /simple_loop_closure/optimized_keyframes
     - Class: rviz_default_plugins/Marker
       Name: Accepted loop edges (red)
       Enabled: true
       Value: true
-      Marker Topic:
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /simple_loop_closure/loop_edges
     - Class: rviz_default_plugins/Odometry
       Name: A FAST odometry
@@ -55,13 +67,41 @@ Visualization Manager:
         Value: Arrow
       Keep: 1000
     - Class: rviz_default_plugins/PointCloud2
-      Name: PGO map cloud
+      Name: PGO optimized accumulated map (light grey)
       Enabled: true
       Value: true
+      Alpha: 0.9
+      Color: 208; 222; 235
+      Color Transformer: FlatColor
+      Position Transformer: XYZ
+      Decay Time: 0
+      Selectable: true
       Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
         Value: /pgo_map_cloud
-      Style: Points
-      Size (Pixels): 2
+      Style: Flat Squares
+      Size (Pixels): 3
+    - Class: rviz_default_plugins/PointCloud2
+      Name: FAST current LiDAR scan (amber)
+      Enabled: true
+      Value: true
+      Alpha: 0.75
+      Color: 255; 188; 85
+      Color Transformer: FlatColor
+      Position Transformer: XYZ
+      Decay Time: 0
+      Selectable: false
+      Topic:
+        Depth: 3
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /cloud_registered_metric
+      Style: Flat Squares
+      Size (Pixels): 3
     - Class: rviz_default_plugins/TF
       Name: Input TF (backend publishes no corrected TF)
       Enabled: true
@@ -69,10 +109,13 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 40
+      Distance: 140
+      Yaw: 0.785398
+      Pitch: 0.94
+      Target Frame: <Fixed Frame>
       Focal Point:
-        X: 0
-        Y: 0
+        X: 14.28
+        Y: -40.62
         Z: 0
 Window Geometry:
   Width: 1400
