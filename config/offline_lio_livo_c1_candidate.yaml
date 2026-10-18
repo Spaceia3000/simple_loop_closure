@@ -1,0 +1,37 @@
+# OFFLINE LIO/LIVO C1 candidate profile, documented 2026-10-18.
+# ExactTime(128), LiDAR reader depth100, PGO writer depth10.
+# Validated on CBD03 LIO and LIVO subset; NOT a proof of correct loop geometry.
+# The default config/simple_loop_closure.yaml is preserved unchanged.
+simple_loop_closure:
+  ros__parameters:
+    mapped_cloud: true
+    time_stamp_tolerance: 0.01
+    # Experimental runtime-arrival buffer; not a certified optimum. The code
+    # default remains 50 and the operational memory-safety cap is 1024.
+    sync_queue_size: 128
+    # RMW /cloud receiver queue capacity, before message_filters ExactTime.
+    # Depth 100 is an experiment; the baseline-preserving default is 10.
+    cloud_input_depth: 100
+    # Baseline-preserving output history. Depths 10 and 100 are experiments,
+    # not production defaults, until the controlled delivery A/B is complete.
+    pgo_output_depth: 10
+    expected_fixed_frame: camera_init
+    expected_body_frame: aft_mapped
+    require_exact_timestamps: true
+    simple_stream_audit: true
+    # Optional aggregate ingress/event/service telemetry; disabled preserves
+    # the native subscription construction and callback path.
+    cloud_input_telemetry: false
+    keyframe_dist_th: 0.5
+    keyframe_angular_dist_th: 0.3
+    loop_search_time_diff_th: 30.0
+    loop_search_dist_diff_th: 30.0
+    loop_search_angular_dist_th: 3.1415
+    loop_search_frame_interval: 1
+    search_radius: 15.0
+    target_frame_num: 50
+    target_voxel_leaf_size: 0.4
+    source_voxel_leaf_size: 0.4
+    vis_map_voxel_leaf_size: 0.8
+    fitness_score_th: 0.3
+    vis_map_cloud_frame_interval: 3
