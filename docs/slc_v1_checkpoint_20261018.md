@@ -1,37 +1,35 @@
-# SimpleLoopClosure V1 — Checkpoint de continuidad (18-10-2026)
+# Checkpoint Loop Closure V1 — 18 de octubre de 2026
 
-## Identidad y conservación
+## Identidad del candidato
+- Repositorio FAST-LIVO2: rama refactor/fast-livo-yaml-first, commit 52db4d4, limpio y sin modificaciones.
+- SimpleLoopClosure estable: integration/slc-v1-20261018, commit 502225d, limpio e intacto.
+- Candidato funcional UNIFICADO: integration/slc-v1-c1-s123-candidate-20261018, base 3f35f20, merge C1 66dc91b, guía 00f819e. Compilación Humble PASS, 103 pruebas de paquete sin fallos; suite Python unificada 102 PASS.
+- Candidato SLC usa ExactTime(128), cloud_input_depth configurable (default 10, ensayos a 100), pgo_output_depth configurable (default 1, ensayos a 10), CycloneDDS en mismo host. No declara lazo calibrado científico.
 
-- Candidato FUNCIONAL UNIFICADO  (base , C1 merge , operador/RViz ). Contiene S1 , S2  configurable con default 10, y S3  configurable con default 1. Los valores 100/10 se proporcionan mediante YAML experimental, NO son defaults de producción.
-- Base estable SLC , intacta; FAST-LIVO2 , intacto.
-- C1 certificación fuente+testigo+grabador+PGO+grafo: código en rama , integrado en candidata . Gate  requiere timestamps ordenados e idénticos, cero faltantes/extras/duplicados y auditorías nativas. No fija 2660: deriva cardinalidad del rosbag, verifica metadatos de tópicos, permite  opcional. 93 tests en rama C1, 102 Python y 103 tests ROS en unificada, todos PASS.
-- Guía/launch/RViz validada , derivada de  e integrada en candidata. El TF de FAST NO es TF corregido PGO. LO no certificado.
+## Certificación estricta C1
+- C1 en rama fix/slc-c1-external-completeness-20261018: commits 97a54e6, 73de838, 93 tests Python PASS.
+- El gate --certify-all exige auditorías nativas y secuencias de header.stamp iguales en fuente cloud/odom, testigo, recorder y ambas copias de PGO. Conserva multiplicidades y orden; fuente por SQLite y metadatos; sin contar 2660 de forma fija (admite también LIVO 2377).
+- Auditoría offline de artefactos reales: CBD03 LIO íntegro PASS; tercera LIO FAIL (testigo cloud 2637/2660, grabador cloud 2612/2660); CBD03 LIVO FAIL (fuente 2377, backend 2341, testigo cloud 2309, grabador cloud 2305, PGO 2341).
 
-## Evidencia real CBD03 LIO, 1.0x nominal
+## CBD03 LIO — evidencias anteriores
+- Tres recorridos completos sobre SLC 3f35f20: backend recibe 2660 nubes, ExactTime sincroniza 2660, PGO publica/graba 2660, 351 keyframes, 176 búsquedas, 26 factores de cierre y 377 factores en todos; digests de búsquedas a2dc0d694e034765 y cierres c540fa4a97daa892; velocidades efectivas aprox. 0.9969x, 0.9983x, 0.9984x.
+- Solo los dos primeros tuvieron integridad C1 externa completa. El tercero perdió nubes en testigo/recorder aunque no en backend ni PGO; por ello NO existe 3/3 global C1.
 
-- Tres ejecuciones backend @3f35f20 con fuente 2660 parejas, SLC recibe y sincroniza 2660, publica y graba PGO 2660. Todas: 351 keyframes, 176 búsquedas, 26 factores de cierre, 377 factores GTSAM; digest búsquedas , cierres ; auditorías nativas PASS. Tasa efectiva ~0.9969x, 0.9983x, 0.9984x.
-- NO 3/3 C1 global: tercera ejecución  testigo cloud 2637/2660, grabador cloud 2612/2660 aunque backend y PGO completos. C1  lo debe clasificar FAIL. Las dos primeras ejecuciones son PASS externo.
-- CBD03 LIVO previo @reader100, fuente 2377; backend 2341, testigo cloud 2309, recorder cloud 2305, PGO 2341. Las pérdidas coinciden con congestión temporal ~178–185s, pero diferentes receptores perdieron diferentes timestamps. FAIL global. Documentado en . DDS instrumentación opcional lista  (111 tests) AÚN sin replay de validación causal.
+## Validación ROS del candidato unificado (30 segundos, 301 pares)
+- Prueba inicial en directorio runs/slc_v1_unified_c1_certifyall_30s_20261018: con --drain-sec 5, FAIL correctamente. Fuente, testigo y grabador conservaban 301 pares; backend solo procesó 280 clouds/sync/PGO, faltando índices finales 280..300, sin errores UDP.
+- Nueva prueba con mismo binario y demás ajustes, solo --drain-sec 25, directorio runs/slc_v1_unified_c1_certifyall_30s_drain25_20261018: PASS. Fuente/testigo/recorder registraron 301 nubes y 301 odometrías, testigo/recorder PGO 301, ambas auditorías internas PASS, 4 procesos retornaron 0. Un proceso externo de calibración LiDAR–cámara coexistía; no atribuir causalidad exclusiva. El valor 25 segundos no es universal; mejorar a drenaje basado en condición con watchdog.
+- Primer intento de esta prueba con ROS_DOMAIN_ID 196 fue rechazado por validador seguro 0..190, antes de iniciar. Repetido con dominio 189.
 
-## Prueba estricta del candidato unificado @00f819e
+## Geometría F3 — gate científico todavía ABIERTO
+- Rama aislada feat/slc-f3-safe-geometry-20261018, commit 9dacb10. Build PASS, 115 tests (0 errores/fallos, 1 omitido por gate de observabilidad no implementado).
+- Corrige unidades entre radio nanoflann (umbral cuadrático m2) e ICP (distancia m), excluye el scan fuente y vecinos demasiado cercanos por tiempo del submapa, separa covarianzas de rotación (rad2) y traslación (m2), prueba derivadas SE(3) y conserva la dirección del factor.
+- NO hay ICP máximo calibrado, ni varianzas empíricas ni Hessiano/rank/condition robustos en producción: por seguridad esta rama deshabilita LOOP FACTORS por defecto. NO fusionarla con candidato funcional sin calibración; no declarar cerrado F3 ni validación TP/FP, APE/RPE, ground truth.
+- Definir parámetros en fit/heldout con submapas reales y correspondencias ICP, validación de incertidumbre y observabilidad antes de integrar.
 
-Origen: rosbag fijo  con 301 pares.
-
-- Con  y , corrida : FAIL correctamente, backend solo 280 cloud/sync/PGO, aunque fuente, testigo, recorder recibieron 301 cloud y 301 odom. Los 21 ausentes son índices terminales 280..300 y el reproductor marcó velocidad efectiva ~0.95268x. No se registraron .
-- Mismo binario, misma configuración y fuente, solo , corrida : PASS. Fuente/testigo/recorder 301 nube+odom, PGO testigo/recorder 301, backend nativo y auditoría externa PASS, 4/4 procesos retornan 0. Un proceso ajeno de calibración LiDAR–cámara estaba activo: esto limita causalidad perfecta entre ejecuciones.
-- **No se establece que 25 s sea universal ni certificación de full dataset bajo **. Próxima mejora operativa recomendada: gate de drenaje dependiente de recepción completa + watchdog acotado antes de enviar SIGINT; no usar espera ciega como certificación.
-
-## F3 matemático — BLOQUEO DE CIERRE CIENTÍFICO
-
-- Rama aislada , build PASS, 115 test records, 0 errors, 0 failures, 1 omitted expected. Arregla radio nanoflann m² vs correspondencia ICP m, excluye fuente/scans temporalmente cercanos de submapas, sustituye fitness m² como pseudo-varianza 6DoF por parámetros explícitos de varianza rotacional rad²/traslacional m² y conserva el BetweenFactor  con tests SE(3).
-- En estricta ausencia de  y dos varianzas calibradas, y sin comprobación de rango/observabilidad de correspondencias ICP, la política segura deja **LOOP FACTORS DESHABILITADOS**. NO MERGEAR F3 A LA CANDIDATA FUNCIONAL ni anunciar corrección de lazo certificada hasta calibración independiente y Hessiano/rango implementados. No inventar umbrales.
-- Calibrar distancias, covarianzas y criterios de rank/condition en fit/heldout con correspondencias de la ruta ICP+submapa real y comprobar residuo normalizado SE(3), consistencia, verdaderos/falsos cierres, APE/RPE con ground truth.
-
-## Siguientes gates antes de release
-
-1. Investigar recepción DDS bajo CBD03 LIVO y cargas adversas con telemetry opcional, y resolver integridad C1 de todos los observadores y ROS2 recorder sin falsos PASS.
-2. Completar rank/observability y calibración F3, ensayos fit/heldout y factores geométricos válidos (sin backport directo de C3: su ruta ICP fue distinta).
-3. Certificar seis combinaciones UGV10/Retail/CBD03 × LIO/LIVO, tres repeticiones y 1.0x real medido: 18 campañas, tiempo/memoria/SSD, exact seq/PGO/markers, grafo y métricas; LO aparte.
-4. Comprobar mapa/trajectoria corregidos en RViz y UGV físico; documentación comandos sencillos en  (ROS2 Humble, localhost solo mismo equipo). Trabajar con commits/ramas aisladas, nunca tocar el main o stable hasta PASS.
-
-**Hardware a 17:19:** SSD  ~24GB libres y 99% ocupado. No realizar 18 grabaciones de ~3GB sin planificación de almacenamiento; conservar evidencias/sha256, no borrar datos del usuario sin autorización.
+## Otras tareas y protección
+- Guía reproducible LIO/LIVO y RViz: docs/slc_v1_operator_validated_20261018.md; original commit cbe6bcc e integrado en candidato. El backend no publica TF corregido. LO NO certificado.
+- Telemetría DDS opcional: rama feat/slc-s2-ingress-dds-telemetry-20261018 @ee4477e, 111 tests PASS, pendiente de prueba causal en CBD03 LIVO.
+- Forense LIVO: test/slc-s2-livo-loss-diagnostics-20261018 @19bd8fd, 6 tests PASS; nubes ausentes cerca 177.8–184.5 s, testigo/recorder/backend perdieron conjuntos distintos, DDS root cause desconocida.
+- Restan 6 combinaciones UGV10/Retail/CBD03 por LIO/LIVO x 3 repeticiones, medición de rendimiento y calidad geométrica, visualización y UGV físico. LO aparte.
+- SSD estaba al 99% y con unos 24 GB libres; no programar 18 bags de varios GB sin almacenamiento/retención segura; no borrar datos sin autorización.
+- Todas las ramas y el frontend y SLC estable quedaron limpios; no se hicieron push ni merge a la rama estable.
