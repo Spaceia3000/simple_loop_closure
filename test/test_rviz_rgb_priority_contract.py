@@ -1,4 +1,4 @@
-"""Regression: local FAST RGB is visible, global corrected map remains XYZI."""
+"""Regression: colored GTSAM-corrected 3D RGB map is the default visual layer."""
 from pathlib import Path
 import yaml
 
@@ -19,18 +19,20 @@ def topic_items(ds, topic):
 def test_rgb_priority_and_truthful_pgo_map():
     ds = displays("simple_loop_closure_ab.rviz")
     pgo, = topic_items(ds,"/pgo_map_cloud")
-    assert pgo["Enabled"] and pgo["Color Transformer"] == "FlatColor"
+    assert not pgo["Enabled"] and pgo["Color Transformer"] == "FlatColor"
+    corrected, = topic_items(ds,"/pgo_rgb_map_cloud")
+    assert corrected["Enabled"] and corrected["Color Transformer"] == "RGB8"
     assert pgo["Alpha"] <= 0.2 and pgo["Size (Pixels)"] == 1
     original_rgb = topic_items(ds,"/cloud_registered")
     assert len(original_rgb) == 2
-    assert all(d["Enabled"] and d["Color Transformer"] == "RGB8" for d in original_rgb)
+    assert all(not d["Enabled"] and d["Color Transformer"] == "RGB8" for d in original_rgb)
     assert {d["Decay Time"] for d in original_rgb} == {0, 10000}
     assert {d["Size (Pixels)"] for d in original_rgb} == {2,4}
     lidar, = topic_items(ds,"/cloud_registered_metric")
     assert lidar["Enabled"] and lidar["Decay Time"] == 2
     assert lidar["Color Transformer"] == "FlatColor"
     fast, = topic_items(ds,"/path")
-    assert fast["Enabled"] and fast["Line Width"] == 0.03
+    assert not fast["Enabled"] and fast["Line Width"] == 0.03
     orig, = topic_items(ds,"/simple_loop_closure/original_keyframes")
     assert not orig["Enabled"]
     assert topic_items(ds,"/simple_loop_closure/optimized_keyframes")[0]["Enabled"]

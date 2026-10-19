@@ -29,19 +29,21 @@ def test_humble_global_local_topic_and_display_contract():
     assert set(paths) == {"/path"}
     assert paths["/path"]["Color"] == "0; 255; 255"
     assert paths["/path"]["Line Width"] == 0.03
-    assert all(item["Enabled"] for item in paths.values())
+    assert not paths["/path"]["Enabled"]  # Optional local original curve no longer hides magenta.
 
     clouds = [d for d in displays if d["Class"] == "rviz_default_plugins/PointCloud2"]
-    assert len(clouds) == 4
+    assert len(clouds) == 5
     pgo = next(c for c in clouds if c["Topic"]["Value"] == "/pgo_map_cloud")
-    assert pgo["Color Transformer"] == "FlatColor" and pgo["Enabled"]
+    assert pgo["Color Transformer"] == "FlatColor" and not pgo["Enabled"]
+    global_rgb=next(c for c in clouds if c["Topic"]["Value"]=="/pgo_rgb_map_cloud")
+    assert global_rgb["Enabled"] and global_rgb["Color Transformer"]=="RGB8"
     rgb = [c for c in clouds if c["Topic"]["Value"] == "/cloud_registered"]
     assert len(rgb) == 2
     assert all(c["Color Transformer"] == "RGB8" for c in rgb)
     cumulative = next(c for c in rgb if c["Decay Time"] == 10000)
     newest = next(c for c in rgb if c["Decay Time"] == 0)
-    assert cumulative["Enabled"] and cumulative["Value"]
-    assert newest["Enabled"] and newest["Value"]
+    assert not cumulative["Enabled"]  # Local FAST cumulative RGB is kept available but off.
+    assert not newest["Enabled"]
     metric = next(c for c in clouds if c["Topic"]["Value"] == "/cloud_registered_metric")
     assert metric["Enabled"] and metric["Value"]
     assert metric["Color Transformer"] == "FlatColor"

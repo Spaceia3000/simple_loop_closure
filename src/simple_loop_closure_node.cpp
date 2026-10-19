@@ -2,6 +2,8 @@
 #include <simple_loop_closure/math_safety.hpp>
 
 #include <csignal>
+#include <cmath>
+#include <pcl/common/point_tests.h>
 
 namespace
 {
@@ -78,6 +80,46 @@ SimpleLoopClosureNode::~SimpleLoopClosureNode()
 void SimpleLoopClosureNode::initialize()
 {
   pub_map_cloud_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/pgo_map_cloud", 1);
+  this->declare_parameter<bool>("rgb_global.enabled", false);
+  this->declare_parameter<double>("rgb_global.frame_admission_hz", 5.0);
+  this->declare_parameter<double>("rgb_global.association_max_delta_s", 0.75);
+  this->declare_parameter<double>("rgb_global.frame_voxel_leaf_m", 0.15);
+  this->declare_parameter<double>("rgb_global.map_voxel_leaf_m", 0.20);
+  this->declare_parameter<int>("rgb_global.max_cached_frames", 1200);
+  this->declare_parameter<int>("rgb_global.max_points_per_frame", 2500);
+  this->declare_parameter<int>("rgb_global.max_output_points", 350000);
+  this->declare_parameter<int>("rgb_global.pending_depth", 8);
+
+  this->get_parameter("rgb_global.enabled", rgb_global_enabled_);
+  this->get_parameter("rgb_global.frame_admission_hz", rgb_frame_admission_hz_);
+  this->get_parameter("rgb_global.association_max_delta_s", rgb_association_max_delta_s_);
+  this->get_parameter("rgb_global.frame_voxel_leaf_m", rgb_frame_voxel_leaf_m_);
+  this->get_parameter("rgb_global.map_voxel_leaf_m", rgb_map_voxel_leaf_m_);
+  this->get_parameter("rgb_global.max_cached_frames", rgb_max_cached_frames_);
+  this->get_parameter("rgb_global.max_points_per_frame", rgb_max_points_per_frame_);
+  this->get_parameter("rgb_global.max_output_points", rgb_max_output_points_);
+  this->get_parameter("rgb_global.pending_depth", rgb_pending_depth_);
+  if (!std::isfinite(rgb_frame_admission_hz_) || rgb_frame_admission_hz_ <= 0.0 ||
+      !std::isfinite(rgb_association_max_delta_s_) || rgb_association_max_delta_s_ <= 0.0 ||
+      rgb_association_max_delta_s_ > 2.0 ||
+      !std::isfinite(rgb_frame_voxel_leaf_m_) || rgb_frame_voxel_leaf_m_ < 0.05 ||
+      !std::isfinite(rgb_map_voxel_leaf_m_) || rgb_map_voxel_leaf_m_ < 0.05 ||
+      rgb_max_cached_frames_ < 1 || rgb_max_cached_frames_ > 2000 ||
+      rgb_max_points_per_frame_ < 1 || rgb_max_points_per_frame_ > 10000 ||
+      rgb_max_output_points_ < 100 || rgb_max_output_points_ > 1000000 ||
+      rgb_pending_depth_ < 1 || rgb_pending_depth_ > 64)
+    throw std::invalid_argument("invalid bounded rgb_global configuration");
+  if (rgb_global_enabled_)
+  {
+    pub_rgb_global_map_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "/pgo_rgb_map_cloud", rclcpp::QoS(1).reliable());
+    // FAST publishes RGB in camera_init using VIO/current ROS time, not exact
+    // metric cloud timestamps. Do not use message_filters ExactTime here.
+    sub_rgb_cloud_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+        "/cloud_registered", rclcpp::SensorDataQoS().keep_last(5),
+        std::bind(&SimpleLoopClosureNode::rgbCloudCallback, this, std::placeholders::_1));
+  }
+
   pub_vis_pose_graph_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/vis_pose_graph", 1);
   pub_original_keyframes_ = this->create_publisher<visualization_msgs::msg::Marker>(
       "/simple_loop_closure/original_keyframes", 1);
@@ -348,6 +390,17 @@ void SimpleLoopClosureNode::initialize()
   // Start Threads
   loop_close_thread_ = std::thread(&SimpleLoopClosureNode::loopCloseThread, this);
   visualize_thread_ = std::thread(&SimpleLoopClosureNode::visualizeThread, this);
+  map_visualize_thread_ = std::thread(&SimpleLoopClosureNode::mapVisualizationThread, this);
+  if (rgb_global_enabled_)
+  {
+    rgb_processing_thread_ = std::thread(&SimpleLoopClosureNode::rgbProcessingThread, this);
+    rgb_visualization_thread_ = std::thread(&SimpleLoopClosureNode::rgbVisualizationThread, this);
+    RCLCPP_INFO(this->get_logger(),
+                "Global corrected RGB enabled: input=/cloud_registered output=/pgo_rgb_map_cloud "
+                "max_frames=%d max_points_per_frame=%d association_dt=%.3fs",
+                rgb_max_cached_frames_, rgb_max_points_per_frame_, rgb_association_max_delta_s_);
+  }
+
 
   RCLCPP_INFO(this->get_logger(), "Loop Closure Node Initialized.");
 }
@@ -728,6 +781,250 @@ void SimpleLoopClosureNode::publishMapCloud(const PointCloudType::Ptr& map_cloud
     return;
 
   pub_map_cloud_->publish(map_cloud_msg);
+}
+
+void SimpleLoopClosureNode::rgbCloudCallback(
+    const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg)
+{
+  if (!rgb_global_enabled_ || !msg)
+    return;
+  // FAST's VIO RGB cloud is in the world frame but may be empty on a LIO
+  // step. Do not accept cloud without real packed RGB, time or frame identity.
+  bool has_rgb = false;
+  for (const auto& field : msg->fields)
+    has_rgb |= (field.name == "rgb" || field.name == "rgba");
+  const std::int64_t stamp_ns =
+      static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL +
+      static_cast<std::int64_t>(msg->header.stamp.nanosec);
+  if (msg->header.frame_id != input_contract_.fixed_frame || stamp_ns <= 0 ||
+      msg->data.empty() || msg->width * static_cast<std::uint64_t>(msg->height) == 0 ||
+      !has_rgb)
+  {
+    std::lock_guard<std::mutex> lock(rgb_mutex_);
+    ++rgb_rejected_;
+    return;
+  }
+  std::lock_guard<std::mutex> lock(rgb_mutex_);
+  const auto interval_ns = static_cast<std::int64_t>(1.0e9 / rgb_frame_admission_hz_);
+  if (rgb_latest_accepted_stamp_ns_ != 0 &&
+      (stamp_ns <= rgb_latest_accepted_stamp_ns_ ||
+       stamp_ns - rgb_latest_accepted_stamp_ns_ < interval_ns))
+  {
+    ++rgb_rejected_;
+    return;
+  }
+  rgb_latest_accepted_stamp_ns_ = stamp_ns;
+  if (rgb_pending_.size() >= static_cast<std::size_t>(rgb_pending_depth_))
+  {
+    rgb_pending_.pop_front();
+    ++rgb_dropped_queue_;
+  }
+  rgb_pending_.push_back(msg);
+  ++rgb_accepted_;
+  rgb_changed_.notify_one();
+}
+
+void SimpleLoopClosureNode::rgbProcessingThread()
+{
+  while (!stop_rgb_threads_)
+  {
+    sensor_msgs::msg::PointCloud2::ConstSharedPtr msg;
+    {
+      std::unique_lock<std::mutex> lock(rgb_mutex_);
+      rgb_changed_.wait_for(lock, std::chrono::milliseconds(300), [this]() {
+        return stop_rgb_threads_ || !rgb_pending_.empty();
+      });
+      if (stop_rgb_threads_)
+        break;
+      if (rgb_pending_.empty())
+        continue;
+      msg = rgb_pending_.front();
+      rgb_pending_.pop_front();
+    }
+
+    try
+    {
+      RgbCloud::Ptr original(new RgbCloud);
+      pcl::fromROSMsg(*msg, *original);
+      if (original->empty())
+        continue;
+      RgbCloud::Ptr finite(new RgbCloud);
+      finite->reserve(original->size());
+      for (const auto& point : original->points)
+        if (pcl::isFinite(point))
+          finite->push_back(point);
+      if (finite->empty())
+        continue;
+      // Perform expensive filtering OUTSIDE the executor callback.
+      pcl::VoxelGrid<pcl::PointXYZRGB> filter;
+      filter.setLeafSize(rgb_frame_voxel_leaf_m_, rgb_frame_voxel_leaf_m_,
+                         rgb_frame_voxel_leaf_m_);
+      filter.setInputCloud(finite);
+      RgbCloud::Ptr reduced(new RgbCloud);
+      filter.filter(*reduced);
+      if (reduced->empty())
+        continue;
+      if (reduced->size() > static_cast<std::size_t>(rgb_max_points_per_frame_))
+      {
+        RgbCloud::Ptr sampled(new RgbCloud);
+        const std::size_t stride =
+            (reduced->size() + static_cast<std::size_t>(rgb_max_points_per_frame_) - 1) /
+            static_cast<std::size_t>(rgb_max_points_per_frame_);
+        sampled->reserve(rgb_max_points_per_frame_);
+        for (std::size_t i = 0; i < reduced->size(); i += stride)
+          sampled->push_back(reduced->points[i]);
+        reduced = sampled;
+      }
+      const std::int64_t stamp_ns =
+          static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL +
+          static_cast<std::int64_t>(msg->header.stamp.nanosec);
+      std::lock_guard<std::mutex> lock(rgb_mutex_);
+      rgb_cached_.push_back({stamp_ns, reduced});
+      while (rgb_cached_.size() > static_cast<std::size_t>(rgb_max_cached_frames_))
+        rgb_cached_.pop_front();
+    }
+    catch (const std::exception& e)
+    {
+      RCLCPP_WARN(this->get_logger(), "Skipping malformed FAST RGB frame: %s", e.what());
+    }
+  }
+}
+
+bool SimpleLoopClosureNode::publishCorrectedRgbMap()
+{
+  std::vector<RgbCachedFrame> frames;
+  {
+    std::lock_guard<std::mutex> lock(rgb_mutex_);
+    if (rgb_cached_.empty())
+      return false;
+    frames.assign(rgb_cached_.begin(), rgb_cached_.end());
+  }
+
+  // Snapshot raw keyframe poses, times and optimized poses by the SAME graph
+  // index. Original clouds are stored in camera_init and can be transformed
+  // using the corresponding raw-to-optimized SE(3) correction.
+  std::vector<simple_loop_closure::RgbPoseAnchor> anchors;
+  {
+    std::lock_guard<std::mutex> guard(mtx_buf_);
+    const std::size_t count =
+        std::min(keyframes_odom_copied_.size(), keyframes_cloud_copied_.size());
+    anchors.reserve(count);
+    for (std::size_t i = 0; i < count; ++i)
+    {
+      simple_loop_closure::RgbPoseAnchor anchor;
+      anchor.stamp_ns =
+          pcl_conversions::fromPCL(keyframes_cloud_copied_[i]->header.stamp).nanoseconds();
+      anchor.raw_pose = *keyframes_odom_copied_[i];
+      anchors.push_back(anchor);
+    }
+  }
+  {
+    std::lock_guard<std::mutex> guard(mtx_res_);
+    const std::size_t count = std::min(anchors.size(), optimization_result_.size());
+    anchors.resize(count);
+    for (std::size_t i = 0; i < count; ++i)
+      anchors[i].optimized_pose = Eigen::Affine3d(
+          optimization_result_.at<gtsam::Pose3>(i).matrix());
+  }
+  if (anchors.empty())
+    return false;
+
+  RgbCloud::Ptr corrected(new RgbCloud);
+  corrected->reserve(std::min<std::size_t>(
+      frames.size() * static_cast<std::size_t>(rgb_max_points_per_frame_),
+      static_cast<std::size_t>(2000000)));
+  const auto tolerance_ns = static_cast<std::int64_t>(
+      1.0e9 * rgb_association_max_delta_s_);
+  std::size_t matched_frames = 0;
+  std::size_t rejected_time = 0;
+  for (const auto& frame : frames)
+  {
+    const int index = simple_loop_closure::nearestRgbPoseAnchor(
+        anchors, frame.stamp_ns, tolerance_ns);
+    if (index < 0)
+    {
+      ++rejected_time;
+      continue;
+    }
+    const Eigen::Affine3d world_correction =
+        simple_loop_closure::rgbWorldCorrection(anchors[index]);
+    if (!simple_loop_closure::validRgbWorldCorrection(world_correction))
+    {
+      ++rejected_time;
+      continue;
+    }
+    RgbCloud transformed;
+    pcl::transformPointCloud(*frame.points, transformed,
+                             world_correction.matrix().cast<float>());
+    *corrected += transformed;
+    ++matched_frames;
+  }
+  if (corrected->empty())
+    return false;
+
+  pcl::VoxelGrid<pcl::PointXYZRGB> global_filter;
+  global_filter.setLeafSize(rgb_map_voxel_leaf_m_, rgb_map_voxel_leaf_m_,
+                            rgb_map_voxel_leaf_m_);
+  global_filter.setInputCloud(corrected);
+  RgbCloud::Ptr global(new RgbCloud);
+  global_filter.filter(*global);
+  if (global->empty())
+    return false;
+
+  if (global->size() > static_cast<std::size_t>(rgb_max_output_points_))
+  {
+    RgbCloud::Ptr sampled(new RgbCloud);
+    const std::size_t stride =
+        (global->size() + static_cast<std::size_t>(rgb_max_output_points_) - 1) /
+        static_cast<std::size_t>(rgb_max_output_points_);
+    sampled->reserve(rgb_max_output_points_);
+    for (std::size_t i = 0; i < global->size(); i += stride)
+      sampled->push_back(global->points[i]);
+    global = sampled;
+  }
+  sensor_msgs::msg::PointCloud2 msg;
+  pcl::toROSMsg(*global, msg);
+  msg.header.frame_id = input_contract_.fixed_frame;
+  msg.header.stamp = static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(anchors.back().stamp_ns));
+  pub_rgb_global_map_->publish(msg);
+
+  std::uint64_t accepted = 0, rejected = 0, dropped = 0;
+  {
+    std::lock_guard<std::mutex> guard(rgb_mutex_);
+    accepted = rgb_accepted_;
+    rejected = rgb_rejected_;
+    dropped = rgb_dropped_queue_;
+  }
+  RCLCPP_INFO(this->get_logger(),
+      "SLC_PGO_RGB_MAP frames_cached=%zu frames_matched=%zu frames_unmatched=%zu "
+      "global_points=%zu keyframes_optimized=%zu accepted=%lu skipped=%lu dropped_pending=%lu",
+      frames.size(), matched_frames, rejected_time, global->size(), anchors.size(),
+      static_cast<unsigned long>(accepted), static_cast<unsigned long>(rejected),
+      static_cast<unsigned long>(dropped));
+  return true;
+}
+
+void SimpleLoopClosureNode::rgbVisualizationThread()
+{
+  while (!stop_rgb_threads_)
+  {
+    {
+      std::unique_lock<std::mutex> lock(rgb_mutex_);
+      rgb_changed_.wait_for(lock, std::chrono::seconds(4), [this]() {
+        return stop_rgb_threads_.load();
+      });
+    }
+    if (stop_rgb_threads_)
+      break;
+    try
+    {
+      publishCorrectedRgbMap();
+    }
+    catch (const std::exception& e)
+    {
+      RCLCPP_ERROR(this->get_logger(), "Corrected RGB map publication failed: %s", e.what());
+    }
+  }
 }
 
 void SimpleLoopClosureNode::constructVisualizationOdometryEdges(const int& res_size,
@@ -1270,12 +1567,20 @@ void SimpleLoopClosureNode::shutdownAndDrain()
 
   stop_visualize_thread_ = true;
   stop_loop_closure_thread_ = true;
+  stop_rgb_threads_ = true;
+  rgb_changed_.notify_all();
   keyframe_changed_.notify_all();
 
   if (loop_close_thread_.joinable())
     loop_close_thread_.join();
   if (visualize_thread_.joinable())
     visualize_thread_.join();
+  if (map_visualize_thread_.joinable())
+    map_visualize_thread_.join();
+  if (rgb_processing_thread_.joinable())
+    rgb_processing_thread_.join();
+  if (rgb_visualization_thread_.joinable())
+    rgb_visualization_thread_.join();
 
   // The final optimizer update is complete before this last native graph snapshot.
   try
@@ -1299,12 +1604,25 @@ void SimpleLoopClosureNode::shutdownAndDrain()
 
 void SimpleLoopClosureNode::visualizeThread()
 {
-  rclcpp::Rate rate(1);  // 1 Hz
+  // Publish the native GTSAM graph at 1 Hz even if the large global point
+  // cloud takes longer to reconstruct. Do not hold a map-building lock here.
+  rclcpp::Rate rate(1);
+  while (rclcpp::ok() && !stop_visualize_thread_)
+  {
+    publishVisualizationGraph();
+    rate.sleep();
+  }
+}
+
+void SimpleLoopClosureNode::mapVisualizationThread()
+{
+  // Preserve the legacy XYZI map output, but never block native graph
+  // markers waiting for the full voxelized map to be rebuilt.
+  rclcpp::WallRate rate(0.33);
   while (rclcpp::ok() && !stop_visualize_thread_)
   {
     PointCloudType::Ptr map_cloud = constructPointCloudMap(vis_map_cloud_frame_interval_);
     publishMapCloud(map_cloud);
-    publishVisualizationGraph();
     rate.sleep();
   }
 }

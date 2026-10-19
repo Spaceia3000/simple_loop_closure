@@ -4,11 +4,13 @@ Panels:
     Name: Displays
     Property Tree Widget:
       Expanded:
-        - /LOCAL FAST RGB cumulative preview (not loop-corrected)1
+        - /GLOBAL current PGO pose only (tiny magenta arrow; not trajectory)1
+        - /GLOBAL corrected 3D RGB map (GTSAM keyframe corrections)1
       Splitter Ratio: 0.5
-    Tree Height: 640
+    Tree Height: 339
   - Class: rviz_common/Views
-    Expanded: [/Current View1]
+    Expanded:
+      - /Current View1
     Name: Views
     Splitter Ratio: 0.5
 Visualization Manager:
@@ -19,29 +21,49 @@ Visualization Manager:
       Class: rviz_default_plugins/Grid
       Color: 160; 160; 164
       Enabled: false
-      Line Style: {Line Width: 0.03, Value: Lines}
+      Line Style:
+        Line Width: 0.029999999329447746
+        Value: Lines
       Name: UGV10 reference grid (approx. x[-12,41], y[-82,1])
       Normal Cell Count: 0
-      Offset: {X: 0, Y: 0, Z: 0}
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
       Plane: XY
       Plane Cell Count: 100
       Reference Frame: <Fixed Frame>
       Value: false
-    - Class: rviz_default_plugins/Odometry
+    - Angle Tolerance: 0.009999999776482582
+      Class: rviz_default_plugins/Odometry
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: true
+        Position:
+          Alpha: 0.30000001192092896
+          Color: 204; 51; 204
+          Scale: 1
+          Value: true
+        Value: true
       Enabled: true
       Keep: 1
       Name: GLOBAL current PGO pose only (tiny magenta arrow; not trajectory)
-      Position Tolerance: 0.01
-      Angle Tolerance: 0.01
+      Position Tolerance: 0.009999999776482582
       Shape:
         Alpha: 1
         Axes Length: 0.5
-        Axes Radius: 0.05
+        Axes Radius: 0.05000000074505806
         Color: 255; 0; 255
-        Head Length: 0.05
-        Head Radius: 0.012
-        Shaft Length: 0.20
-        Shaft Radius: 0.008
+        Head Length: 0.05000000074505806
+        Head Radius: 0.012000000104308128
+        Shaft Length: 0.20000000298023224
+        Shaft Radius: 0.00800000037997961
         Value: Arrow
       Topic:
         Depth: 10
@@ -51,9 +73,46 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /pgo_odom
       Value: true
-    - Alpha: 0.18
+    - Alpha: 1
       Autocompute Intensity Bounds: true
-      Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
+      Autocompute Value Bounds:
+        Max Value: 18.6083984375
+        Min Value: -3.543698787689209
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 255; 255
+      Color Transformer: AxisColor
+      Decay Time: 0
+      Enabled: true
+      Invert Rainbow: false
+      Max Color: 255; 255; 255
+      Max Intensity: 4096
+      Min Color: 0; 0; 0
+      Min Intensity: 0
+      Name: GLOBAL corrected 3D RGB map (GTSAM keyframe corrections)
+      Position Transformer: XYZ
+      Selectable: true
+      Size (Pixels): 2
+      Size (m): 0.004999999888241291
+      Style: Points
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /pgo_rgb_map_cloud
+      Use Fixed Frame: true
+      Use rainbow: true
+      Value: true
+    - Alpha: 0.18000000715255737
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
       Axis: Z
       Channel Name: intensity
       Class: rviz_default_plugins/PointCloud2
@@ -70,7 +129,7 @@ Visualization Manager:
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 1
-      Size (m): 0.01
+      Size (m): 0.009999999776482582
       Style: Points
       Topic:
         Depth: 5
@@ -85,6 +144,8 @@ Visualization Manager:
     - Class: rviz_default_plugins/Marker
       Enabled: true
       Name: GLOBAL accepted loop edges (red)
+      Namespaces:
+        loop_edges: true
       Topic:
         Depth: 10
         Durability Policy: Volatile
@@ -96,6 +157,8 @@ Visualization Manager:
     - Class: rviz_default_plugins/Marker
       Enabled: true
       Name: GLOBAL native optimized GTSAM keyframe trajectory (magenta)
+      Namespaces:
+        optimized_keyframes: true
       Topic:
         Depth: 10
         Durability Policy: Volatile
@@ -105,8 +168,10 @@ Visualization Manager:
         Value: /simple_loop_closure/optimized_keyframes
       Value: true
     - Class: rviz_default_plugins/Marker
-      Enabled: false
+      Enabled: true
       Name: LOCAL true FAST keyframe poses (cyan native marker)
+      Namespaces:
+        original_keyframes: true
       Topic:
         Depth: 10
         Durability Policy: Volatile
@@ -114,24 +179,27 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /simple_loop_closure/original_keyframes
-      Value: false
+      Value: true
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path
       Color: 0; 255; 255
       Enabled: true
-      Head Diameter: 0.3
-      Head Length: 0.2
-      Length: 0.3
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
       Line Style: Billboards
-      Line Width: 0.03
+      Line Width: 0.029999999329447746
       Name: LOCAL FAST path (cyan, uncorrected geometry)
-      Offset: {X: 0, Y: 0, Z: 0}
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
       Pose Color: 0; 255; 255
       Pose Style: None
-      Radius: 0.03
-      Shaft Diameter: 0.1
-      Shaft Length: 0.1
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
       Topic:
         Depth: 1
         Durability Policy: Volatile
@@ -142,7 +210,10 @@ Visualization Manager:
       Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
-      Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
       Axis: Z
       Channel Name: intensity
       Class: rviz_default_plugins/PointCloud2
@@ -159,7 +230,7 @@ Visualization Manager:
       Position Transformer: XYZ
       Selectable: false
       Size (Pixels): 2
-      Size (m): 0.005
+      Size (m): 0.004999999888241291
       Style: Points
       Topic:
         Depth: 5
@@ -171,12 +242,36 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: true
-    - Class: rviz_default_plugins/Odometry
-      Enabled: false
+    - Angle Tolerance: 0.10000000149011612
+      Class: rviz_default_plugins/Odometry
+      Covariance:
+        Orientation:
+          Alpha: 0.5
+          Color: 255; 255; 127
+          Color Style: Unique
+          Frame: Local
+          Offset: 1
+          Scale: 1
+          Value: true
+        Position:
+          Alpha: 0.30000001192092896
+          Color: 204; 51; 204
+          Scale: 1
+          Value: true
+        Value: true
+      Enabled: true
       Keep: 1000
       Name: LOCAL FAST raw odometry (optional; path shown above)
+      Position Tolerance: 0.10000000149011612
       Shape:
+        Alpha: 1
+        Axes Length: 1
+        Axes Radius: 0.10000000149011612
         Color: 25; 255; 255
+        Head Length: 0.30000001192092896
+        Head Radius: 0.10000000149011612
+        Shaft Length: 1
+        Shaft Radius: 0.05000000074505806
         Value: Arrow
       Topic:
         Depth: 10
@@ -185,10 +280,13 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /aft_mapped_to_init
-      Value: false
+      Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
-      Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
       Axis: Z
       Channel Name: intensity
       Class: rviz_default_plugins/PointCloud2
@@ -205,7 +303,7 @@ Visualization Manager:
       Position Transformer: XYZ
       Selectable: false
       Size (Pixels): 4
-      Size (m): 0.005
+      Size (m): 0.004999999888241291
       Style: Points
       Topic:
         Depth: 5
@@ -231,9 +329,12 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /rgb_img
       Value: true
-    - Alpha: 0.65
+    - Alpha: 0.6499999761581421
       Autocompute Intensity Bounds: true
-      Autocompute Value Bounds: {Max Value: 10, Min Value: -10, Value: true}
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
       Axis: Z
       Channel Name: intensity
       Class: rviz_default_plugins/PointCloud2
@@ -250,7 +351,7 @@ Visualization Manager:
       Position Transformer: XYZ
       Selectable: false
       Size (Pixels): 2
-      Size (m): 0.01
+      Size (m): 0.009999999776482582
       Style: Points
       Topic:
         Depth: 1
@@ -265,11 +366,15 @@ Visualization Manager:
     - Class: rviz_default_plugins/TF
       Enabled: false
       Frame Timeout: 15
+      Frames:
+        All Enabled: true
       Marker Scale: 0.5
       Name: Input TF only (SLC publishes no corrected TF)
       Show Arrows: true
       Show Axes: true
       Show Names: true
+      Tree:
+        {}
       Update Interval: 0
       Value: false
   Enabled: true
@@ -287,35 +392,43 @@ Visualization Manager:
     - Class: rviz_default_plugins/Measure
       Line color: 128; 128; 0
   Transformation:
-    Current: {Class: rviz_default_plugins/TF}
+    Current:
+      Class: rviz_default_plugins/TF
   Value: true
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 140
+      Distance: 112.73416137695312
       Enable Stereo Rendering:
-        Stereo Eye Separation: 0.06
+        Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
-      Focal Point: {X: 14, Y: -41, Z: 0}
+      Focal Point:
+        X: 18.715970993041992
+        Y: -32.64756393432617
+        Z: -26.200695037841797
       Focal Shape Fixed Size: true
-      Focal Shape Size: 0.05
+      Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
-      Near Clip Distance: 0.01
-      Pitch: 0.94
+      Near Clip Distance: 0.009999999776482582
+      Pitch: 0.8399996757507324
       Target Frame: camera_init
       Value: Orbit (rviz_default_plugins)
-      Yaw: 0.785398
+      Yaw: 2.41538143157959
     Saved: ~
 Window Geometry:
-  Displays: {collapsed: false}
-  LOCAL FAST camera RGB image: {collapsed: false}
+  Displays:
+    collapsed: false
   Height: 1000
   Hide Left Dock: false
   Hide Right Dock: false
-  Views: {collapsed: false}
-  Width: 1600
-  X: 40
+  LOCAL FAST camera RGB image:
+    collapsed: false
+  QMainWindow State: 000000ff00000000fd0000000100000000000001cb0000038efc0200000003fb00000036004c004f00430041004c00200046004100530054002000630061006d006500720061002000520047004200200069006d006100670065010000003d000000ee0000002800fffffffb000000100044006900730070006c006100790073010000013100000190000000c900fffffffb0000000a0056006900650077007301000002c700000104000000a400ffffff000006170000038e00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000
+  Views:
+    collapsed: false
+  Width: 2024
+  X: 70
   Y: 40
