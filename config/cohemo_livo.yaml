@@ -1,3 +1,7 @@
+# Cohemo UGV | Simple Loop Closure deployment | ROS 2 Humble
+# Operational graph parameters inherited from integration/v1-humble.
+# Geometric acceptance is not independently certified for Cohemo hardware.
+# LiDAR + IMU + Sony: enable global RGB map reconstruction.
 simple_loop_closure:
   ros__parameters:
     mapped_cloud: true
@@ -7,14 +11,14 @@ simple_loop_closure:
     sync_queue_size: 128
     # RMW /cloud receiver queue capacity, before message_filters ExactTime.
     # Depth 100 is an experiment; the baseline-preserving default is 10.
-    cloud_input_depth: 10
+    cloud_input_depth: 100
     # Baseline-preserving output history. Depths 10 and 100 are experiments,
     # not production defaults, until the controlled delivery A/B is complete.
-    pgo_output_depth: 1
+    pgo_output_depth: 10
     expected_fixed_frame: camera_init
     expected_body_frame: aft_mapped
     require_exact_timestamps: true
-    simple_stream_audit: false
+    simple_stream_audit: true
     # Optional aggregate ingress/event/service telemetry; disabled preserves
     # the native subscription construction and callback path.
     cloud_input_telemetry: false
@@ -28,11 +32,24 @@ simple_loop_closure:
     target_frame_num: 50
     target_voxel_leaf_size: 0.4
     source_voxel_leaf_size: 0.4
-    vis_map_voxel_leaf_size: 0.8
+    # Presentation-only map density. More points and frames increase CPU/RAM.
+    vis_map_voxel_leaf_size: 0.4
     fitness_score_th: 0.3
-    vis_map_cloud_frame_interval: 3
-    # Marker-only widths; preserve the historical 0.10 m default appearance.
+    vis_map_cloud_frame_interval: 1
+    # Optional corrected global RGB visualization. Exact RGB-to-LIO stamps
+    # do NOT exist: each admitted VIO cloud is matched to a nearby keyframe
+    # with an explicit 0.75s timestamp limit and skipped otherwise.
+    rgb_global:
+      enabled: true
+      frame_admission_hz: 5.0
+      association_max_delta_s: 0.75
+      frame_voxel_leaf_m: 0.15
+      map_voxel_leaf_m: 0.20
+      max_cached_frames: 1200
+      max_points_per_frame: 2500
+      max_output_points: 350000
+      pending_depth: 8
     visualization:
-      optimized_edge_width_m: 0.10
-      original_edge_width_m: 0.10
-      loop_edge_width_m: 0.10
+      optimized_edge_width_m: 0.03
+      original_edge_width_m: 0.03
+      loop_edge_width_m: 0.008

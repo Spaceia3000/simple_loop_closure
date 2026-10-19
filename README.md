@@ -1,45 +1,63 @@
-# simple_loop_closure
+# Cohemo UGV — Simple Loop Closure (ROS 2 Humble)
 
-For the isolated, script-only ROS 2 transport audit, see
-[F1 independent transport diagnostic](docs/f1_transport_diagnostic.md).
+Rama Cohemos, derivada de integration/v1-humble. Contiene solo el paquete
+ROS 2 de lazo cerrado para UGV. Drivers de sensores y FAST-LIVO2 se despliegan
+en sus propios paquetes; este repositorio no incluye dichos componentes.
 
-## Overview
-This repository is a ROS 2 implementation of Loop Closure for LiDAR SLAM. Currently (as on 15 Oct 2024) it is tested on ROS2 Humble, Ubuntu 22.04 
+## Dependencias
 
+Ubuntu 22.04, ROS 2 Humble, GTSAM 4.x, PCL, Eigen, Boost, nanoflann
+(libnanoflann-dev) y las dependencias de package.xml. Instalar los drivers
+de Livox MID-360, Sony e IMU y FAST-LIVO2 por separado.
 
-## Build
-Please install [GTSAM4.x](https://gtsam.org/get_started/).
+## Archivos para el despliegue
 
-Or
-```
-# Add PPA
-* sudo add-apt-repository ppa:borglab/gtsam-develop
-* sudo apt update  # not necessary since Bionic
-# Install:
-* sudo apt install libgtsam-dev libgtsam-unstable-dev
-```
-```
-* cd ros2_ws/src/
+- src/ + include/: fuente y cabeceras del backend.
+- config/cohemo_livo.yaml: LiDAR/IMU/Sony, mapa RGB global activado.
+- config/cohemo_lio.yaml: LiDAR/IMU sin reconstrucción RGB.
+- launch/simple_loop_closure.launch.py: único launch.
+- rviz/simple_loop_closure_ab.rviz: vista del operador, ejes fijo/móvil.
+- CMakeLists.txt, package.xml, LICENSE: construcción y licencia.
 
-* git clone --recursive-submodules -b ros2 https://github.com/ashBabu/simple_loop_closure.git
-```
+No hay datasets, scripts de investigación, informes ni tests en esta rama.
 
-## Execution
-Example: This is [simple_loop_closure.launch.py](launch/simple_loop_closure.launch.py) is currently configured to run [Direct Lidar Inertial Odometry](https://github.com/vectr-ucla/direct_lidar_inertial_odometry). Make modifications as needed
+## Compilar en workspace ROS 2 del robot
+
+~~~bash
+source /opt/ros/humble/setup.bash
+cd ~/Documents/simple_loop_closure_ws
+colcon build --packages-select simple_loop_closure --symlink-install
+source install/setup.bash
 ~~~
-* Launch your ros2 simulation environment
-* ros2 launch simple_loop_closure simple_loop_closure.launch.py
-~~~
-## Saving Point Cloud Maps
-Please put the destination directory in the "save_req" topic and publish.
-~~~
-ros2 topic pub /save_req std_msgs/msg/String "{data: /home/username/}"
-~~~
-This will publish a `map.pcd` at the specified directory and also create another directory `/home/username/frames/` where each frames are also saved.
 
-## Parameters
-Please refer to [Parameters.md](Parameters.md).
+## Ejecutar después de iniciar sensores y FAST-LIVO2
 
-## Requirements for LiDAR Odometry
-- LiDAR odometry must publish `nav_msgs::msg::Odometry` format odometry and a paired LiDAR pointcloud of type `sensor_msgs::msg::PointCloud2`.
-- The timestamps of the two topics must be almost the same time.
+FAST-LIVO2 debe ejecutarse con perfil Cohemo y use_sim_time:=false
+para datos reales, publicando /aft_mapped_to_init y
+/cloud_registered_metric con timestamps idénticos.
+
+~~~bash
+source /opt/ros/humble/setup.bash
+source ~/Documents/simple_loop_closure_ws/install/setup.bash
+ros2 launch simple_loop_closure simple_loop_closure.launch.py   loop_closure_params_file:=$HOME/Documents/simple_loop_closure_ws/src/simple_loop_closure/config/cohemo_livo.yaml   cloud_topic:=/cloud_registered_metric   odometry_topic:=/aft_mapped_to_init
+~~~
+
+Para LIO sin Sony, cambia a config/cohemo_lio.yaml. El mapa global de
+RGB aparece en /pgo_rgb_map_cloud cuando la cámara aporta puntos reales,
+con frame camera_init. La corrección RGB usa un keyframe temporalmente
+compatible y no implica corrección precisa por punto.
+
+## RViz
+
+Cargar rviz/simple_loop_closure_ab.rviz. Contiene los ejes de origen y
+del robot y la visualización GTSAM. Conserva los últimos ajustes que
+guardó el operador. Si el display GLOBAL corrected 3D RGB map quedó
+desactivado, marcar Enabled y seleccionar Color Transformer RGB8 para
+visualizar colores reales en vez de colores de altura.
+
+## Limitaciones de seguridad y validación
+
+La certificación F3 de geometría de cierres y consistencia contra una
+referencia independiente sigue pendiente. No tratar cierres ICP
+aceptados como evidencia de localización segura en producción. Los
+experimentos y reportes completos siguen preservados en integration/v1-humble.
