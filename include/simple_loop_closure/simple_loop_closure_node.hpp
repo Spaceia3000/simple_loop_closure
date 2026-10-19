@@ -8,6 +8,7 @@
 #include <simple_loop_closure/ingress_telemetry.hpp>
 #include <simple_loop_closure/keyframe_gate.hpp>
 #include <simple_loop_closure/stream_audit.hpp>
+#include <simple_loop_closure/rgb_global_map_math.hpp>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <sensor_msgs/msg/point_field.hpp>
@@ -31,6 +32,7 @@
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/common/transforms.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/filters/filter.h>
 #include <pcl/filters/voxel_grid.h>
@@ -79,6 +81,40 @@ private:
     typedef message_filters::Synchronizer<SyncPolicy> Sync;
 
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_map_cloud_;
+    // Optional bounded global RGB reconstruction. No changes to GTSAM/ICP.
+    using RgbCloud = pcl::PointCloud<pcl::PointXYZRGB>;
+    struct RgbCachedFrame
+    {
+      std::int64_t stamp_ns{0};
+      RgbCloud::ConstPtr points;
+    };
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_rgb_global_map_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_rgb_cloud_;
+    bool rgb_global_enabled_{false};
+    double rgb_frame_admission_hz_{5.0};
+    double rgb_association_max_delta_s_{0.75};
+    double rgb_frame_voxel_leaf_m_{0.15};
+    double rgb_map_voxel_leaf_m_{0.20};
+    int rgb_max_cached_frames_{1200};
+    int rgb_max_points_per_frame_{2500};
+    int rgb_max_output_points_{350000};
+    int rgb_pending_depth_{8};
+    std::mutex rgb_mutex_;
+    std::condition_variable rgb_changed_;
+    std::deque<sensor_msgs::msg::PointCloud2::ConstSharedPtr> rgb_pending_;
+    std::deque<RgbCachedFrame> rgb_cached_;
+    std::int64_t rgb_latest_accepted_stamp_ns_{0};
+    std::uint64_t rgb_accepted_{0};
+    std::uint64_t rgb_rejected_{0};
+    std::uint64_t rgb_dropped_queue_{0};
+    std::atomic<bool> stop_rgb_threads_{false};
+    std::thread rgb_processing_thread_;
+    std::thread rgb_visualization_thread_;
+    void rgbCloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg);
+    void rgbProcessingThread();
+    void rgbVisualizationThread();
+    bool publishCorrectedRgbMap();
+
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_vis_pose_graph_;
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_pgo_odometry_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_original_keyframes_;
@@ -177,6 +213,7 @@ private:
 
     std::thread loop_close_thread_;
     std::thread visualize_thread_;
+    std::thread map_visualize_thread_;
     std::thread save_thread_;
     std::atomic<bool> saving_;
     std::string save_directory_;
@@ -217,6 +254,7 @@ private:
     void publishVisualizationGraph();
 
     void visualizeThread();
+    void mapVisualizationThread();
 
     void copyKeyFrames();
 

@@ -59,7 +59,7 @@ def test_global_and_local_displays_have_distinct_topics_and_styles():
     }
 
     path = by_topic["/path"]
-    assert path["Enabled"] and path["Color"] == "0; 255; 255"
+    assert not path["Enabled"] and path["Color"] == "0; 255; 255"
     assert path["Line Width"] == 0.03
 
     pgo_pose = by_topic["/pgo_odom"]
@@ -77,7 +77,11 @@ def test_global_and_local_displays_have_distinct_topics_and_styles():
         "/cloud_registered_metric",
         "/rgb_img",
     ):
-        assert by_topic[topic]["Enabled"] and by_topic[topic]["Value"] if topic != "/simple_loop_closure/original_keyframes" else not by_topic[topic]["Enabled"]
+        if topic in ("/simple_loop_closure/original_keyframes", "/pgo_map_cloud"):
+            assert not by_topic[topic]["Enabled"]
+        else:
+            assert by_topic[topic]["Enabled"] and by_topic[topic]["Value"]
+    assert by_topic["/pgo_rgb_map_cloud"]["Enabled"]
 
     metric = by_topic["/cloud_registered_metric"]
     assert metric["Color Transformer"] == "FlatColor"

@@ -118,6 +118,9 @@ if(BUILD_TESTING)
   target_include_directories(test_stream_audit PRIVATE include)
   ament_add_gtest(test_ingress_telemetry test/test_ingress_telemetry.cpp)
   target_include_directories(test_ingress_telemetry PRIVATE include)
+  ament_add_gtest(test_rgb_global_map_math test/test_rgb_global_map_math.cpp)
+  target_include_directories(test_rgb_global_map_math PRIVATE include)
+  target_link_libraries(test_rgb_global_map_math Eigen3::Eigen)
   ament_add_gtest(test_keyframe_gate test/test_keyframe_gate.cpp)
   target_include_directories(test_keyframe_gate PRIVATE include)
   target_compile_definitions(test_keyframe_gate PRIVATE
@@ -149,6 +152,10 @@ if(BUILD_TESTING)
   )
   ament_add_pytest_test(test_rviz_visibility_fix_contract
     test/test_rviz_visibility_fix_contract.py
+    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
+  )
+  ament_add_pytest_test(test_rgb_global_map_contract
+    test/test_rgb_global_map_contract.py
     ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
   )
 endif()
