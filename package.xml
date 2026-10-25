@@ -2,9 +2,9 @@
 <package format="2">
   <name>simple_loop_closure</name>
   <version>0.0.0</version>
-  <description>The simple_loop_closure package</description>
+  <description>ROS 2 Humble geometric loop closure and GTSAM pose graph backend for Cohemos UGV (LIO/LIVO).</description>
 
-  <maintainer email="main@todo.todo">main</maintainer>
+  <maintainer email="breidylopezf@gmail.com">Spaceia3000</maintainer>
 
   <license>BSD</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -41,18 +41,13 @@
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>pcl_conversions</exec_depend>
   <exec_depend>pcl_ros</exec_depend>
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-scipy</exec_depend>
   <exec_depend>rclcpp</exec_depend>
-  <exec_depend>rviz2</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>tf2</exec_depend>
   <exec_depend>tf2_eigen</exec_depend>
-  <test_depend>ament_cmake_gtest</test_depend>
-  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

@@ -1,43 +1,47 @@
 import os
-from launch_ros.actions import Node
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+
 from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    ld = LaunchDescription()
     package_dir = get_package_share_directory('simple_loop_closure')
-    default_params_file = os.path.join(package_dir, 'config', 'simple_loop_closure.yaml')
-    # FAST-LIVO2's metric cloud is in camera_init and has the exact same
-    # measurement stamp as /aft_mapped_to_init. /cloud_registered is not an
-    # equivalent input because it is stamped with the node clock.
-    default_odometry_topic = "/aft_mapped_to_init"
-    default_cloud_topic = "/cloud_registered_metric"
+    mode_arg = LaunchConfiguration('mode')
+    params_arg = LaunchConfiguration('loop_closure_params_file')
+    odometry_arg = LaunchConfiguration('odometry_topic')
+    cloud_arg = LaunchConfiguration('cloud_topic')
 
-    arg_loop_closure_params_file = LaunchConfiguration('loop_closure_params_file')
-    arg_odometry_topic = LaunchConfiguration('odometry_topic')
-    arg_cloud_topic = LaunchConfiguration('cloud_topic')
+    def launch_backend(context):
+        mode = mode_arg.perform(context).strip().lower()
+        if mode not in ('lio', 'livo'):
+            raise ValueError(f"Unsupported SimpleLoopClosure mode {mode!r}; use lio or livo")
 
-    ld.add_action(DeclareLaunchArgument('loop_closure_params_file', default_value=str(default_params_file),
-                                        description='name or path to the parameters file to use.'))
-    ld.add_action(DeclareLaunchArgument('odometry_topic', default_value=default_odometry_topic))
-    ld.add_action(DeclareLaunchArgument('cloud_topic', default_value=default_cloud_topic))
+        override = params_arg.perform(context).strip()
+        params_file = override or os.path.join(package_dir, 'config', f'ugv_lsi_{mode}.yaml')
+        if not os.path.isfile(params_file):
+            raise FileNotFoundError(f"SimpleLoopClosure parameters not found: {params_file}")
 
-    remappings=[
-        ('/odometry', arg_odometry_topic),
-        ('/cloud', arg_cloud_topic)
-    ]
+        return [Node(
+            package='simple_loop_closure',
+            executable='simple_loop_closure_node',
+            name='simple_loop_closure',
+            output='both',
+            parameters=[params_file],
+            remappings=[
+                ('/odometry', odometry_arg),
+                ('/cloud', cloud_arg),
+            ],
+        )]
 
-    node_loop_closure = Node(
-        package='simple_loop_closure',
-        executable='simple_loop_closure_node',
-        name='simple_loop_closure',
-        output='both',
-        parameters=[arg_loop_closure_params_file],
-        remappings=remappings,
-    )
-    ld.add_action(node_loop_closure)
-
-    return ld
+    return LaunchDescription([
+        DeclareLaunchArgument('mode', default_value='livo',
+                              description='Sensor mode: lio or livo.'),
+        DeclareLaunchArgument('loop_closure_params_file', default_value='',
+                              description='Optional YAML override; otherwise load config/ugv_lsi_<mode>.yaml from installed package.'),
+        DeclareLaunchArgument('odometry_topic', default_value='/aft_mapped_to_init'),
+        DeclareLaunchArgument('cloud_topic', default_value='/cloud_registered_metric'),
+        OpaqueFunction(function=launch_backend),
+    ])

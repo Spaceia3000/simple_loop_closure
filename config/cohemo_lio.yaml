@@ -1,7 +1,7 @@
-# OFFLINE LIO/LIVO C1 candidate profile, documented 2026-10-18.
-# ExactTime(128), LiDAR reader depth100, PGO writer depth10.
-# Validated on CBD03 LIO and LIVO subset; NOT a proof of correct loop geometry.
-# The default config/simple_loop_closure.yaml is preserved unchanged.
+# Cohemo UGV | Simple Loop Closure deployment | ROS 2 Humble
+# Operational graph parameters inherited from integration/v1-humble.
+# Geometric acceptance is not independently certified for Cohemo hardware.
+# LiDAR + IMU without camera: no RGB subscription/map reconstruction.
 simple_loop_closure:
   ros__parameters:
     mapped_cloud: true
@@ -36,19 +36,8 @@ simple_loop_closure:
     vis_map_voxel_leaf_size: 0.4
     fitness_score_th: 0.3
     vis_map_cloud_frame_interval: 1
-    # Optional corrected global RGB visualization. Exact RGB-to-LIO stamps
-    # do NOT exist: each admitted VIO cloud is matched to a nearby keyframe
-    # with an explicit 0.75s timestamp limit and skipped otherwise.
-    rgb_global:
-      enabled: true
-      frame_admission_hz: 5.0
-      association_max_delta_s: 0.75
-      frame_voxel_leaf_m: 0.15
-      map_voxel_leaf_m: 0.20
-      max_cached_frames: 1200
-      max_points_per_frame: 2500
-      max_output_points: 350000
-      pending_depth: 8
+    # LIO geometry-only: RGB reconstruction remains disabled by the
+    # node default (rgb_global.enabled=false). Do not load RGB cache limits.
     visualization:
       optimized_edge_width_m: 0.03
       original_edge_width_m: 0.03

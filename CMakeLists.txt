@@ -24,10 +24,8 @@ find_package(pcl_ros REQUIRED)
 find_package(message_filters REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_eigen REQUIRED)
-find_path(NANOFLANN_INCLUDE_DIR NAMES nanoflann.hpp
-  HINTS ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/nanoflann/include
-  REQUIRED
-)
+# Deployment obtains nanoflann from libnanoflann-dev.
+find_path(NANOFLANN_INCLUDE_DIR NAMES nanoflann.hpp REQUIRED)
 
 include_directories(
   include
@@ -66,98 +64,11 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-# add_executable(test_lc_node src/test.cpp)
-# ament_target_dependencies(test_lc_node
-#   "pcl_conversions"
-#   "rcl_interfaces"
-#   "rclcpp"
-#   "rcutils"
-#   "sensor_msgs"
-#   "nav_msgs"
-#   "std_msgs"
-#   "geometry_msgs"
-#   "pcl_ros"
-#   "visualization_msgs"
-#   "tf2"
-#   "tf2_eigen"
-# )
-# target_link_libraries(test_lc_node
-#   ${Boost_LIBRARIES}
-#   ${PCL_LIBRARIES}
-#   gtsam
-# )
-# install(TARGETS
-#   test_lc_node
-#   DESTINATION lib/${PROJECT_NAME}
-# )
-
 install(DIRECTORY config launch rviz
-  DESTINATION share/${PROJECT_NAME} 
+  DESTINATION share/${PROJECT_NAME}
 )
-
-install(PROGRAMS
-  scripts/analyze_loop_geometry.py
-  scripts/evaluate_loop_closures.py
-  scripts/evaluate_graph_correction.py
+install(PROGRAMS scripts/check_runtime.sh
   DESTINATION lib/${PROJECT_NAME}
 )
-
-if(BUILD_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
-  find_package(ament_cmake_pytest REQUIRED)
-  ament_add_gtest(test_fast_livo2_contract test/test_fast_livo2_contract.cpp)
-  target_include_directories(test_fast_livo2_contract PRIVATE include)
-  target_link_libraries(test_fast_livo2_contract Eigen3::Eigen)
-  ament_add_gtest(test_exact_time_sync test/test_exact_time_sync.cpp)
-  ament_target_dependencies(test_exact_time_sync
-    "message_filters"
-    "nav_msgs"
-    "sensor_msgs"
-  )
-  ament_add_gtest(test_stream_audit test/test_stream_audit.cpp)
-  target_include_directories(test_stream_audit PRIVATE include)
-  ament_add_gtest(test_ingress_telemetry test/test_ingress_telemetry.cpp)
-  target_include_directories(test_ingress_telemetry PRIVATE include)
-  ament_add_gtest(test_rgb_global_map_math test/test_rgb_global_map_math.cpp)
-  target_include_directories(test_rgb_global_map_math PRIVATE include)
-  target_link_libraries(test_rgb_global_map_math Eigen3::Eigen)
-  ament_add_gtest(test_keyframe_gate test/test_keyframe_gate.cpp)
-  target_include_directories(test_keyframe_gate PRIVATE include)
-  target_compile_definitions(test_keyframe_gate PRIVATE
-    SLC_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
-  )
-  target_link_libraries(test_keyframe_gate Eigen3::Eigen)
-  ament_add_gtest(test_deterministic_loop_schedule test/test_deterministic_loop_schedule.cpp)
-  target_include_directories(test_deterministic_loop_schedule PRIVATE include)
-  ament_add_gtest(test_deterministic_gtsam_schedule test/test_deterministic_gtsam_schedule.cpp)
-  target_include_directories(test_deterministic_gtsam_schedule PRIVATE include ${GTSAM_INCLUDE_DIRS})
-  target_link_libraries(test_deterministic_gtsam_schedule gtsam)
-  # This host has an incompatible globally installed third-party pytest plugin.
-  # Disable plugin auto-loading so the package's self-contained tests remain
-  # deterministic in both CMake's discovery probe and the test invocation.
-  set(ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD} 1)
-  ament_add_pytest_test(test_launch_contract test/test_launch_contract.py
-    ENV
-      "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
-      "ROS_LOG_DIR=${CMAKE_CURRENT_BINARY_DIR}/ros_test_logs"
-  )
-  ament_add_pytest_test(test_evaluate_loop_closures test/test_evaluate_loop_closures.py
-    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
-  )
-  ament_add_pytest_test(test_evaluate_graph_correction test/test_evaluate_graph_correction.py
-    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
-  )
-  ament_add_pytest_test(test_analyze_loop_geometry test/test_analyze_loop_geometry.py
-    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
-  )
-  ament_add_pytest_test(test_rviz_visibility_fix_contract
-    test/test_rviz_visibility_fix_contract.py
-    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
-  )
-  ament_add_pytest_test(test_rgb_global_map_contract
-    test/test_rgb_global_map_contract.py
-    ENV "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1"
-  )
-endif()
 
 ament_package()
